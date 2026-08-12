@@ -7,7 +7,7 @@
 | Field | Detail |
 | --- | --- |
 | **Product name** | Remember My Pill (RMP) |
-| **Document version** | 1.2.1 |
+| **Document version** | 1.2.2 |
 | **Last updated** | 13 August 2026 |
 | **Primary deliverable** | Premium marketing website, product showcase and viral waitlist |
 | **Frontend** | Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, Framer Motion, Lucide Icons |
@@ -38,6 +38,16 @@
 - Confirmed that legal identity, mailing address, external legal review, and
   final Terms of Use remain launch blockers; this update does not approve or
   activate a public pilot, referrals, status access, or email delivery.
+
+### Version 1.2.2 Update Summary
+
+- Added B3C internal browser status-session infrastructure: hash-only,
+  server-side sessions with a fixed seven-day lifetime, current-session and
+  future all-session revocation primitives, and a maximum of five active
+  browser sessions per waitlist entry.
+- Locked future browser credentials to a `Secure`, `HttpOnly`,
+  `SameSite=Lax`, host-only cookie. No status-access, verification-exchange,
+  logout, referral, or email-delivery route is activated by this update.
 
 ---
 

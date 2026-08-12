@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"remember_my_pill/backend/internal/access"
 	"remember_my_pill/backend/internal/httpapi"
 	"remember_my_pill/backend/migrations"
 )
@@ -60,7 +61,7 @@ func orderedMigrations(t *testing.T) []migrations.Migration {
 
 func dropWaitlist(t *testing.T) {
 	t.Helper()
-	for _, table := range []string{"waitlist_verification_tokens", "referral_events", "waitlist_entries"} {
+	for _, table := range []string{"status_access_sessions", "waitlist_verification_tokens", "referral_events", "waitlist_entries"} {
 		if _, err := integrationPool.Exec(context.Background(), "DROP TABLE IF EXISTS "+table+" CASCADE"); err != nil {
 			t.Fatal(err)
 		}
@@ -114,9 +115,12 @@ func TestIntegrationMigrationLifecycleAndLegacyConsent(t *testing.T) {
 	applyUp(t, items)
 	applyDown(t, items)
 	applyUp(t, items)
-	var migration005Columns int
+	var migration005Columns, migration006Columns int
 	if err := integrationPool.QueryRow(context.Background(), `SELECT count(*) FROM information_schema.columns WHERE table_name = 'waitlist_entries' AND column_name IN ('marketing_consented_at', 'marketing_consent_version', 'marketing_withdrawn_at')`).Scan(&migration005Columns); err != nil || migration005Columns != 3 {
 		t.Fatalf("full up/down/up did not restore migration 005 schema: columns=%d err=%v", migration005Columns, err)
+	}
+	if err := integrationPool.QueryRow(context.Background(), `SELECT count(*) FROM information_schema.columns WHERE table_name = 'status_access_sessions' AND column_name IN ('session_hash', 'expires_at', 'revoked_at', 'last_used_at')`).Scan(&migration006Columns); err != nil || migration006Columns != 4 {
+		t.Fatalf("full up/down/up did not restore migration 006 schema: columns=%d err=%v", migration006Columns, err)
 	}
 
 	// Exercise the legacy path separately. Migration 002 intentionally makes
@@ -288,6 +292,203 @@ func TestIntegrationReferralAndVerificationTokenConstraints(t *testing.T) {
 	var tokens int
 	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM waitlist_verification_tokens WHERE entry_id = $1`, tokenEntryID).Scan(&tokens); err != nil || tokens != 0 {
 		t.Fatalf("cascade tokens=%d err=%v", tokens, err)
+	}
+}
+
+func TestIntegrationBrowserSessionLifecycleAndCap(t *testing.T) {
+	resetDatabase(t)
+	ctx := context.Background()
+	var entryID string
+	if err := integrationPool.QueryRow(ctx, `INSERT INTO waitlist_entries (email_normalized) VALUES ('browser-session@example.test') RETURNING id::text`).Scan(&entryID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Add(-time.Hour)
+	sessions := make([]access.BrowserSession, 0, access.MaxActiveBrowserSessions+1)
+	for i := 0; i < access.MaxActiveBrowserSessions; i++ {
+		session, err := access.CreateBrowserSession(ctx, integrationPool, entryID, now.Add(time.Duration(i)*time.Second))
+		if err != nil || session.EntryID != entryID || !session.ExpiresAt.Equal(now.Add(time.Duration(i)*time.Second).Add(access.BrowserSessionTTL)) {
+			t.Fatalf("create session %d: session=%+v err=%v", i, session, err)
+		}
+		sessions = append(sessions, session)
+		var storedHash string
+		if err := integrationPool.QueryRow(ctx, `SELECT session_hash FROM status_access_sessions WHERE entry_id = $1 AND expires_at = $2`, entryID, session.ExpiresAt).Scan(&storedHash); err != nil || storedHash != access.HashToken(session.RawID) || storedHash == session.RawID {
+			t.Fatalf("session must persist only its hash: err=%v", err)
+		}
+		if _, err := integrationPool.Exec(ctx, `UPDATE status_access_sessions SET created_at = $2 WHERE session_hash = $1`, access.HashToken(session.RawID), now.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newest, err := access.CreateBrowserSession(ctx, integrationPool, entryID, now.Add(6*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := access.LookupBrowserSession(ctx, integrationPool, sessions[0].RawID, now.Add(6*time.Second)); !errors.Is(err, access.ErrSessionUnavailable) {
+		t.Fatalf("oldest session should have been revoked, err=%v", err)
+	}
+	for _, session := range append(sessions[1:], newest) {
+		if got, err := access.LookupBrowserSession(ctx, integrationPool, session.RawID, now.Add(6*time.Second)); err != nil || got != entryID {
+			t.Fatalf("expected active session entry=%q got=%q err=%v", entryID, got, err)
+		}
+	}
+	var active int
+	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM status_access_sessions WHERE entry_id = $1 AND revoked_at IS NULL AND expires_at > $2`, entryID, now.Add(6*time.Second)).Scan(&active); err != nil || active != access.MaxActiveBrowserSessions {
+		t.Fatalf("active=%d err=%v", active, err)
+	}
+	if err := access.RevokeBrowserSession(ctx, integrationPool, newest.RawID, now.Add(7*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := access.RevokeBrowserSession(ctx, integrationPool, newest.RawID, now.Add(8*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := access.LookupBrowserSession(ctx, integrationPool, newest.RawID, now.Add(8*time.Second)); !errors.Is(err, access.ErrSessionUnavailable) {
+		t.Fatalf("revoked session was usable: %v", err)
+	}
+	if err := access.RevokeAllBrowserSessions(ctx, integrationPool, entryID, now.Add(9*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := access.LookupBrowserSession(ctx, integrationPool, sessions[1].RawID, now.Add(9*time.Second)); !errors.Is(err, access.ErrSessionUnavailable) {
+		t.Fatalf("all-session revocation did not apply: %v", err)
+	}
+
+	expiring, err := access.CreateBrowserSession(ctx, integrationPool, entryID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := access.LookupBrowserSession(ctx, integrationPool, expiring.RawID, now.Add(access.BrowserSessionTTL)); !errors.Is(err, access.ErrSessionUnavailable) {
+		t.Fatalf("expired session was usable: %v", err)
+	}
+	if err := access.CleanupExpiredBrowserSessions(ctx, integrationPool, now.Add(access.BrowserSessionTTL)); err != nil {
+		t.Fatal(err)
+	}
+	var expired int
+	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM status_access_sessions WHERE expires_at <= $1`, now.Add(access.BrowserSessionTTL)).Scan(&expired); err != nil || expired != 0 {
+		t.Fatalf("expired rows=%d err=%v", expired, err)
+	}
+	if _, err := integrationPool.Exec(ctx, `DELETE FROM waitlist_entries WHERE id = $1`, entryID); err != nil {
+		t.Fatal(err)
+	}
+	var remaining int
+	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM status_access_sessions WHERE entry_id = $1`, entryID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("cascade sessions=%d err=%v", remaining, err)
+	}
+}
+
+func TestIntegrationVerificationExchangeCreatesOneBrowserSession(t *testing.T) {
+	resetDatabase(t)
+	ctx := context.Background()
+	var entryID string
+	if err := integrationPool.QueryRow(ctx, `INSERT INTO waitlist_entries (email_normalized) VALUES ('exchange@example.test') RETURNING id::text`).Scan(&entryID); err != nil {
+		t.Fatal(err)
+	}
+	rawVerification, err := access.GenerateToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO waitlist_verification_tokens (entry_id, token_hash, purpose, expires_at) VALUES ($1, $2, 'status_access', $3)`, entryID, access.HashToken(rawVerification), now.Add(access.VerificationTokenTTL)); err != nil {
+		t.Fatal(err)
+	}
+	const attempts = 10
+	results := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := access.ConsumeVerificationAndCreateBrowserSession(ctx, integrationPool, rawVerification, now)
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		} else if !errors.Is(err, access.ErrTokenUnavailable) {
+			t.Fatalf("unexpected exchange error: %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful exchanges=%d", successes)
+	}
+	var used, sessions int
+	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM waitlist_verification_tokens WHERE entry_id = $1 AND used_at IS NOT NULL`, entryID).Scan(&used); err != nil || used != 1 {
+		t.Fatalf("used tokens=%d err=%v", used, err)
+	}
+	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM status_access_sessions WHERE entry_id = $1`, entryID).Scan(&sessions); err != nil || sessions != 1 {
+		t.Fatalf("sessions=%d err=%v", sessions, err)
+	}
+
+	for _, state := range []struct {
+		name      string
+		expiresAt time.Time
+		used      bool
+		revoked   bool
+	}{
+		{name: "invalid", expiresAt: now.Add(access.VerificationTokenTTL)},
+		{name: "expired", expiresAt: now.Add(-time.Minute)},
+		{name: "used", expiresAt: now.Add(access.VerificationTokenTTL), used: true},
+		{name: "revoked", expiresAt: now.Add(access.VerificationTokenTTL), revoked: true},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			raw := "invalid-verification-token"
+			if state.name != "invalid" {
+				var err error
+				raw, err = access.GenerateToken()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var usedAt, revokedAt any
+				if state.used {
+					usedAt = now
+				}
+				if state.revoked {
+					revokedAt = now
+				}
+				if _, err := integrationPool.Exec(ctx, `INSERT INTO waitlist_verification_tokens (entry_id, token_hash, purpose, expires_at, used_at, revoked_at) VALUES ($1, $2, 'status_access', $3, $4, $5)`, entryID, access.HashToken(raw), state.expiresAt, usedAt, revokedAt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := access.ConsumeVerificationAndCreateBrowserSession(ctx, integrationPool, raw, now); !errors.Is(err, access.ErrTokenUnavailable) {
+				t.Fatalf("expected unavailable token, err=%v", err)
+			}
+			var count int
+			if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM status_access_sessions WHERE entry_id = $1`, entryID).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("failed exchange created session: count=%d err=%v", count, err)
+			}
+		})
+	}
+}
+
+func TestIntegrationConcurrentBrowserSessionCreationHonorsCap(t *testing.T) {
+	resetDatabase(t)
+	ctx := context.Background()
+	var entryID string
+	if err := integrationPool.QueryRow(ctx, `INSERT INTO waitlist_entries (email_normalized) VALUES ('concurrent-sessions@example.test') RETURNING id::text`).Scan(&entryID); err != nil {
+		t.Fatal(err)
+	}
+	const attempts = 10
+	results := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := access.CreateBrowserSession(ctx, integrationPool, entryID, time.Now().UTC())
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatalf("concurrent session creation: %v", err)
+		}
+	}
+	var active int
+	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM status_access_sessions WHERE entry_id = $1 AND revoked_at IS NULL AND expires_at > $2`, entryID, time.Now().UTC()).Scan(&active); err != nil || active != access.MaxActiveBrowserSessions {
+		t.Fatalf("active sessions=%d err=%v", active, err)
 	}
 }
 

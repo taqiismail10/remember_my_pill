@@ -59,6 +59,10 @@ register `POST /api/waitlist/status-access/request`,
 referral-resolve route, or a Postmark webhook endpoint. See
 [B3B email infrastructure](backend-phase-b3b-email-infrastructure.md).
 
+B3C adds internal, server-side browser status-session primitives only. It does
+not register a verification exchange, logout, status, referral, or webhook
+route. See [B3C browser session infrastructure](backend-phase-b3c-status-session-infrastructure.md).
+
 ## B2B-Prep pilot consent foundation
 
 The USA + Canada adult-pilot foundation recognizes `waitlist-consent-v1` and

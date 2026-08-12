@@ -25,6 +25,8 @@ type Config struct {
 	PostmarkMessageStream        string
 	PostmarkStatusAccessTemplate string
 	PilotLegalContentApproved    bool
+	RuntimeEnvironment           string
+	StatusSessionCookieSecure    bool
 }
 
 func Load() (Config, error) {
@@ -40,12 +42,27 @@ func Load() (Config, error) {
 		PostmarkServerToken:          strings.TrimSpace(os.Getenv("POSTMARK_SERVER_TOKEN")),
 		PostmarkMessageStream:        strings.TrimSpace(os.Getenv("POSTMARK_MESSAGE_STREAM")),
 		PostmarkStatusAccessTemplate: strings.TrimSpace(os.Getenv("POSTMARK_STATUS_ACCESS_TEMPLATE")),
+		RuntimeEnvironment:           strings.ToLower(strings.TrimSpace(os.Getenv("RMP_ENVIRONMENT"))),
 	}
 	legalApproved, err := parseBoolean("PILOT_LEGAL_CONTENT_APPROVED", os.Getenv("PILOT_LEGAL_CONTENT_APPROVED"))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.PilotLegalContentApproved = legalApproved
+	if cfg.RuntimeEnvironment == "" {
+		cfg.RuntimeEnvironment = "production"
+	}
+	if cfg.RuntimeEnvironment != "production" && cfg.RuntimeEnvironment != "development" {
+		return Config{}, fmt.Errorf("RMP_ENVIRONMENT must be production or development")
+	}
+	statusCookieSecure, err := parseDefaultTrueBoolean("STATUS_SESSION_COOKIE_SECURE", os.Getenv("STATUS_SESSION_COOKIE_SECURE"))
+	if err != nil {
+		return Config{}, err
+	}
+	if !statusCookieSecure && cfg.RuntimeEnvironment != "development" {
+		return Config{}, fmt.Errorf("STATUS_SESSION_COOKIE_SECURE=false is allowed only when RMP_ENVIRONMENT=development")
+	}
+	cfg.StatusSessionCookieSecure = statusCookieSecure
 	if cfg.EmailProvider == "" {
 		cfg.EmailProvider = "fake"
 	}
@@ -79,6 +96,17 @@ func parseBoolean(name, value string) (bool, error) {
 	}
 	if value == "true" {
 		return true, nil
+	}
+	return false, fmt.Errorf("%s must be true or false", name)
+}
+
+func parseDefaultTrueBoolean(name, value string) (bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "true" {
+		return true, nil
+	}
+	if value == "false" {
+		return false, nil
 	}
 	return false, fmt.Errorf("%s must be true or false", name)
 }

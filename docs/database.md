@@ -6,7 +6,8 @@ The repository-owned development PostgreSQL 16 service is bound only to
 `002_waitlist_entries_name_optional.up.sql`,
 `003_waitlist_referral_consent.up.sql`,
 `004_referral_events_access_tokens.up.sql`, and
-`005_waitlist_marketing_consent.up.sql`. `waitlist_entries` has a PostgreSQL
+`005_waitlist_marketing_consent.up.sql`, and
+`006_status_access_sessions.up.sql`. `waitlist_entries` has a PostgreSQL
 UUID, bounded optional nullable name, bounded unique normalized email, and
 server-generated timestamps. Migration 003 adds nullable staged
 `referral_code`, `referred_by_id`, `status_token_hash`, `consent_version`, and
@@ -28,6 +29,13 @@ Migration 005 adds independent nullable marketing-consent evidence:
 `marketing_withdrawn_at`. A check constraint prohibits a consent version
 without its timestamp (or the reverse). Existing and historical rows remain
 NULL/marketing-unconsented; no consent is backfilled or inferred.
+
+Migration 006 adds `status_access_sessions`: a hash-only, server-side browser
+session table with fixed expiry, revocation, optional last-used timestamp, and
+an `ON DELETE CASCADE` link to its waitlist entry. Its unique session-hash
+index supports credential lookup; active-entry and expiry indexes support the
+five-session cap and cleanup. It is infrastructure only and creates no public
+route or browser cookie by itself.
 
 Do not run down migrations against the development database. The disposable
 integration database is separately bound to `127.0.0.1:5434` through

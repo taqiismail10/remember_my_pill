@@ -30,6 +30,14 @@ validated placeholders in `.env.example`, including a secret
 The final status-access template and B2B/legacy-consent approval are still
 required before delivery can be enabled.
 
+B3C session infrastructure defaults to production-safe settings when its
+future routes are introduced: `RMP_ENVIRONMENT=production` and
+`STATUS_SESSION_COOKIE_SECURE=true`. Local HTTP development must explicitly
+set `RMP_ENVIRONMENT=development` and may then set the cookie flag to `false`;
+startup rejects an insecure session-cookie setting outside development. The
+development cookie has a distinct non-`__Host-` name because the browser
+requires `Secure` for the production `__Host-rmp-status` name.
+
 The B2B-Prep privacy and consent foundation is a USA + Canada, adults-18+
 pilot draft. `PILOT_LEGAL_CONTENT_APPROVED=false` is the required safe default.
 Changing it to `true` only enforces the configured required consent version;

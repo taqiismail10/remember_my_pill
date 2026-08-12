@@ -34,13 +34,31 @@ func TestValidateEmailProvider(t *testing.T) {
 }
 
 func TestLoadDefaultsToFakeWithoutPostmarkCredentials(t *testing.T) {
-	for _, key := range []string{"DATABASE_URL", "ALLOWED_ORIGIN", "PORT", "CONSENT_VERSION", "TRUSTED_PROXY_CIDRS", "EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "EMAIL_FROM_NAME", "STATUS_ACCESS_BASE_URL", "POSTMARK_SERVER_TOKEN", "POSTMARK_MESSAGE_STREAM", "POSTMARK_STATUS_ACCESS_TEMPLATE", "PILOT_LEGAL_CONTENT_APPROVED"} {
+	for _, key := range []string{"DATABASE_URL", "ALLOWED_ORIGIN", "PORT", "CONSENT_VERSION", "TRUSTED_PROXY_CIDRS", "EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "EMAIL_FROM_NAME", "STATUS_ACCESS_BASE_URL", "POSTMARK_SERVER_TOKEN", "POSTMARK_MESSAGE_STREAM", "POSTMARK_STATUS_ACCESS_TEMPLATE", "PILOT_LEGAL_CONTENT_APPROVED", "RMP_ENVIRONMENT", "STATUS_SESSION_COOKIE_SECURE"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("DATABASE_URL", "postgres://example.test/db")
 	t.Setenv("ALLOWED_ORIGIN", "http://example.test")
-	if cfg, err := Load(); err != nil || cfg.EmailProvider != "fake" {
+	if cfg, err := Load(); err != nil || cfg.EmailProvider != "fake" || !cfg.StatusSessionCookieSecure || cfg.RuntimeEnvironment != "production" {
 		t.Fatalf("cfg=%+v err=%v", cfg, err)
+	}
+}
+
+func TestStatusSessionCookieSecurityConfiguration(t *testing.T) {
+	for _, key := range []string{"DATABASE_URL", "ALLOWED_ORIGIN", "RMP_ENVIRONMENT", "STATUS_SESSION_COOKIE_SECURE"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("DATABASE_URL", "postgres://example.test/db")
+	t.Setenv("ALLOWED_ORIGIN", "http://example.test")
+	t.Setenv("RMP_ENVIRONMENT", "development")
+	t.Setenv("STATUS_SESSION_COOKIE_SECURE", "false")
+	if cfg, err := Load(); err != nil || cfg.StatusSessionCookieSecure {
+		t.Fatalf("development cfg=%+v err=%v", cfg, err)
+	}
+
+	t.Setenv("RMP_ENVIRONMENT", "production")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected insecure production cookie configuration to fail")
 	}
 }
 

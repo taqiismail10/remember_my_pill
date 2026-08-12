@@ -21,6 +21,7 @@ func Ordered() ([]Migration, error) {
 		"003_waitlist_referral_consent",
 		"004_referral_events_access_tokens",
 		"005_waitlist_marketing_consent",
+		"006_status_access_sessions",
 	}
 	migrations := make([]Migration, 0, len(names))
 	for _, name := range names {
