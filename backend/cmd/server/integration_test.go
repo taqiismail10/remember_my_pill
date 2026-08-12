@@ -4,17 +4,22 @@ package main
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"remember_my_pill/backend/internal/httpapi"
+	"remember_my_pill/backend/migrations"
 )
 
 var integrationPool *pgxpool.Pool
@@ -24,12 +29,18 @@ func TestMain(m *testing.M) {
 	if dsn == "" {
 		os.Exit(0)
 	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
+	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		panic(err)
 	}
-	if err := pool.Ping(ctx); err != nil {
+	if config.ConnConfig.Database != "remember_my_pill_test" {
+		panic("integration tests require the disposable remember_my_pill_test database")
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		panic(err)
+	}
+	if err := pool.Ping(context.Background()); err != nil {
 		panic(err)
 	}
 	integrationPool = pool
@@ -37,161 +48,253 @@ func TestMain(m *testing.M) {
 	pool.Close()
 	os.Exit(code)
 }
-func migration(t *testing.T, name string) string {
+
+func orderedMigrations(t *testing.T) []migrations.Migration {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
+	items, err := migrations.Ordered()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	return items
 }
+
+func dropWaitlist(t *testing.T) {
+	t.Helper()
+	for _, table := range []string{"waitlist_verification_tokens", "referral_events", "waitlist_entries"} {
+		if _, err := integrationPool.Exec(context.Background(), "DROP TABLE IF EXISTS "+table+" CASCADE"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func applyUp(t *testing.T, items []migrations.Migration) {
+	t.Helper()
+	for _, migration := range items {
+		if _, err := integrationPool.Exec(context.Background(), migration.Up); err != nil {
+			t.Fatalf("apply %s: %v", migration.Name, err)
+		}
+	}
+}
+
+func applyDown(t *testing.T, items []migrations.Migration) {
+	t.Helper()
+	for i := len(items) - 1; i >= 0; i-- {
+		if _, err := integrationPool.Exec(context.Background(), items[i].Down); err != nil {
+			t.Fatalf("revert %s: %v", items[i].Name, err)
+		}
+	}
+}
+
 func resetDatabase(t *testing.T) {
 	t.Helper()
-	ctx := context.Background()
-	_, err := integrationPool.Exec(ctx, migration(t, "001_waitlist_entries.down.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = integrationPool.Exec(ctx, migration(t, "001_waitlist_entries.up.sql")); err != nil {
-		t.Fatal(err)
-	}
+	dropWaitlist(t)
+	applyUp(t, orderedMigrations(t))
 }
-func integrationRouter() http.Handler {
-	return newRouter(integrationPool, "http://localhost:3000", newLimiter(nil))
+
+func integrationRouter(store httpapi.Store, readiness httpapi.Readiness) http.Handler {
+	return httpapi.NewRouter(store, readiness, httpapi.Options{
+		AllowedOrigin:  "http://localhost:3000",
+		ConsentVersion: "policy-2026-08",
+		Logger:         slog.New(slog.NewTextHandler(ioDiscard{}, nil)),
+	})
 }
-func integrationPost(r http.Handler, name, email, ip string) *httptest.ResponseRecorder {
-	q := httptest.NewRequest(http.MethodPost, "/api/waitlist", strings.NewReader(`{"name":"`+name+`","email":"`+email+`"}`))
+
+func integrationPost(r http.Handler, body, ip string) *httptest.ResponseRecorder {
+	q := httptest.NewRequest(http.MethodPost, "/api/waitlist", strings.NewReader(body))
 	q.RemoteAddr = ip + ":1234"
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, q)
 	return w
 }
 
-func TestIntegrationMigrationLifecycleAndSchema(t *testing.T) {
-	ctx := context.Background()
-	_, _ = integrationPool.Exec(ctx, migration(t, "001_waitlist_entries.down.sql"))
-	if _, err := integrationPool.Exec(ctx, migration(t, "001_waitlist_entries.up.sql")); err != nil {
-		t.Fatal(err)
-	}
+func TestIntegrationMigrationLifecycleAndLegacyConsent(t *testing.T) {
+	items := orderedMigrations(t)
+	dropWaitlist(t)
+	applyUp(t, items)
+	applyDown(t, items)
+	applyUp(t, items)
 	var exists bool
-	if err := integrationPool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='waitlist_entries')`).Scan(&exists); err != nil || !exists {
-		t.Fatalf("table exists=%v err=%v", exists, err)
+	if err := integrationPool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'waitlist_verification_tokens')`).Scan(&exists); err != nil || !exists {
+		t.Fatalf("full up/down/up did not restore migration 004 schema: exists=%v err=%v", exists, err)
 	}
-	var prohibited int
-	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_name='waitlist_entries' AND column_name IN ('health_data','referral_code','referral_count')`).Scan(&prohibited); err != nil || prohibited != 0 {
-		t.Fatalf("prohibited=%d err=%v", prohibited, err)
-	}
-	if _, err := integrationPool.Exec(ctx, migration(t, "001_waitlist_entries.down.sql")); err != nil {
+
+	// Exercise the legacy path separately. Migration 002 intentionally makes
+	// names nullable, so its historical down migration cannot restore NOT NULL
+	// while a valid legacy NULL name exists without deleting or inventing data.
+	dropWaitlist(t)
+	applyUp(t, items[:2])
+	if _, err := integrationPool.Exec(context.Background(), `INSERT INTO waitlist_entries (name, email_normalized) VALUES (NULL, 'legacy@example.test')`); err != nil {
 		t.Fatal(err)
 	}
-	var after bool
-	if err := integrationPool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='waitlist_entries')`).Scan(&after); err != nil || after {
-		t.Fatalf("removed=%v err=%v", after, err)
-	}
-	if _, err := integrationPool.Exec(ctx, migration(t, "001_waitlist_entries.up.sql")); err != nil {
+	applyUp(t, items[2:])
+
+	var consentVersion *string
+	var consentedAt *time.Time
+	var referralCode, statusToken *string
+	if err := integrationPool.QueryRow(context.Background(), `SELECT consent_version, consented_at, referral_code, status_token_hash FROM waitlist_entries WHERE email_normalized = 'legacy@example.test'`).Scan(&consentVersion, &consentedAt, &referralCode, &statusToken); err != nil {
 		t.Fatal(err)
+	}
+	if consentVersion != nil || consentedAt != nil || referralCode != nil || statusToken != nil {
+		t.Fatalf("legacy record was fabricated: consent=%v consented_at=%v referral=%v token=%v", consentVersion, consentedAt, referralCode, statusToken)
+	}
+
+	applyDown(t, items[2:])
+	applyUp(t, items[2:])
+	if err := integrationPool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'waitlist_entries' AND column_name = 'updated_at')`).Scan(&exists); err != nil || !exists {
+		t.Fatalf("migration 003 down/up did not restore schema: exists=%v err=%v", exists, err)
 	}
 }
-func TestIntegrationPersistenceDuplicateAndConstraints(t *testing.T) {
+
+func TestIntegrationPersistenceDuplicateConsentAndConstraints(t *testing.T) {
 	resetDatabase(t)
-	r := integrationRouter()
-	w := integrationPost(r, "  Grace Hopper  ", " GRACE@EXAMPLE.TEST ", "203.0.113.1")
-	if w.Code != 201 {
-		t.Fatalf("first %d %s", w.Code, w.Body.String())
-	}
-	var id string
-	var name, email string
-	var created time.Time
-	if err := integrationPool.QueryRow(context.Background(), `SELECT id::text,name,email_normalized,created_at FROM waitlist_entries`).Scan(&id, &name, &email, &created); err != nil {
+	r := integrationRouter(integrationPool, integrationPool)
+	w := integrationPost(r, `{"name":"  Grace Hopper  ","email":" GRACE@EXAMPLE.TEST ","consent":true,"consentVersion":"policy-2026-08"}`, "203.0.113.1")
+	requireAccepted(t, w)
+
+	var id, name, email string
+	var created, consentedAt, updatedAt time.Time
+	var consentVersion string
+	if err := integrationPool.QueryRow(context.Background(), `SELECT id::text, name, email_normalized, created_at, consent_version, consented_at, updated_at FROM waitlist_entries WHERE email_normalized = 'grace@example.test'`).Scan(&id, &name, &email, &created, &consentVersion, &consentedAt, &updatedAt); err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(id) || name != "Grace Hopper" || email != "grace@example.test" || created.IsZero() {
-		t.Fatalf("stored id=%s name=%q email=%q created=%v", id, name, email, created)
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(id) || name != "Grace Hopper" || email != "grace@example.test" || created.IsZero() || consentVersion != "policy-2026-08" || consentedAt.IsZero() || updatedAt.IsZero() {
+		t.Fatalf("stored id=%s name=%q email=%q created=%v consent=%q consentedAt=%v updatedAt=%v", id, name, email, created, consentVersion, consentedAt, updatedAt)
 	}
-	for _, address := range []string{"grace@example.test", "GrAcE@Example.Test"} {
-		w = integrationPost(r, "Grace", address, "203.0.113."+string(rune('2'+len(address)%5)))
-		if w.Code != 409 || errorCode(t, w) != "WAITLIST_EMAIL_EXISTS" {
-			t.Fatalf("dup %d %s", w.Code, w.Body.String())
-		}
-	}
+	duplicate := integrationPost(r, `{"email":"GrAcE@Example.Test"}`, "203.0.113.2")
+	requireAccepted(t, duplicate)
 	var count int
-	if err := integrationPool.QueryRow(context.Background(), `SELECT count(*) FROM waitlist_entries`).Scan(&count); err != nil || count != 1 {
+	if err := integrationPool.QueryRow(context.Background(), `SELECT count(*) FROM waitlist_entries WHERE email_normalized = 'grace@example.test'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
-	// name is nullable (migration 002): a NULL name must be accepted, not
-	// rejected, at the database level.
-	if _, err := integrationPool.Exec(context.Background(), `INSERT INTO waitlist_entries (name,email_normalized) VALUES (NULL,'null-name@example.test')`); err != nil {
+	if _, err := integrationPool.Exec(context.Background(), `INSERT INTO waitlist_entries (name, email_normalized) VALUES (NULL, 'null-name@example.test')`); err != nil {
 		t.Fatalf("NULL name should be allowed: %v", err)
 	}
-	for _, q := range []string{`INSERT INTO waitlist_entries (name,email_normalized) VALUES ('valid',NULL)`, `INSERT INTO waitlist_entries (name,email_normalized) VALUES ('` + strings.Repeat("a", 101) + `','long-name@example.test')`, `INSERT INTO waitlist_entries (name,email_normalized) VALUES ('valid','` + strings.Repeat("a", 246) + `@example.test')`, `INSERT INTO waitlist_entries (name,email_normalized) VALUES ('again','grace@example.test')`} {
-		if _, err := integrationPool.Exec(context.Background(), q); err == nil {
-			t.Fatalf("constraint did not reject %q", q)
+	for _, query := range []string{
+		`INSERT INTO waitlist_entries (name,email_normalized) VALUES ('valid',NULL)`,
+		`INSERT INTO waitlist_entries (name,email_normalized) VALUES ('` + strings.Repeat("a", 101) + `','long-name@example.test')`,
+		`INSERT INTO waitlist_entries (name,email_normalized) VALUES ('valid','` + strings.Repeat("a", 246) + `@example.test')`,
+		`INSERT INTO waitlist_entries (name,email_normalized) VALUES ('again','grace@example.test')`,
+	} {
+		if _, err := integrationPool.Exec(context.Background(), query); err == nil {
+			t.Fatalf("constraint did not reject %q", query)
 		}
 	}
 }
-func TestIntegrationEmailOnlySignupStoresNullName(t *testing.T) {
+
+func TestIntegrationEmailOnlyHoneypotAndReadiness(t *testing.T) {
 	resetDatabase(t)
-	r := integrationRouter()
-	q := httptest.NewRequest(http.MethodPost, "/api/waitlist", strings.NewReader(`{"email":"nameless@example.test"}`))
-	q.RemoteAddr = "203.0.113.50:1234"
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, q)
-	if w.Code != 201 {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	r := integrationRouter(integrationPool, integrationPool)
+	ready := httptest.NewRecorder()
+	r.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if ready.Code != http.StatusOK || ready.Body.String() != `{"status":"ready"}` {
+		t.Fatalf("ready=%d %s", ready.Code, ready.Body.String())
 	}
-	var name *string
-	if err := integrationPool.QueryRow(context.Background(), `SELECT name FROM waitlist_entries WHERE email_normalized='nameless@example.test'`).Scan(&name); err != nil {
+
+	requireAccepted(t, integrationPost(r, `{"email":"compatibility@example.test"}`, "203.0.113.3"))
+	var name, consentVersion *string
+	var consentedAt *time.Time
+	if err := integrationPool.QueryRow(context.Background(), `SELECT name, consent_version, consented_at FROM waitlist_entries WHERE email_normalized = 'compatibility@example.test'`).Scan(&name, &consentVersion, &consentedAt); err != nil {
 		t.Fatal(err)
 	}
-	if name != nil {
-		t.Fatalf("expected NULL name, got %q", *name)
+	if name != nil || consentVersion != nil || consentedAt != nil {
+		t.Fatalf("compatibility record should remain unconsented: name=%v consent=%v consented_at=%v", name, consentVersion, consentedAt)
+	}
+
+	requireAccepted(t, integrationPost(r, `{"email":"bot@example.test","company":"Bot Inc"}`, "203.0.113.4"))
+	var bots int
+	if err := integrationPool.QueryRow(context.Background(), `SELECT count(*) FROM waitlist_entries WHERE email_normalized = 'bot@example.test'`).Scan(&bots); err != nil || bots != 0 {
+		t.Fatalf("honeypot rows=%d err=%v", bots, err)
+	}
+
+	unavailable := integrationRouter(errorStore{err: errors.New("database unavailable")}, errorReadiness{err: errors.New("database unavailable")})
+	failedReady := httptest.NewRecorder()
+	unavailable.ServeHTTP(failedReady, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if failedReady.Code != http.StatusServiceUnavailable || strings.Contains(strings.ToLower(failedReady.Body.String()), "database") {
+		t.Fatalf("unavailable readiness=%d %s", failedReady.Code, failedReady.Body.String())
 	}
 }
+
 func TestIntegrationConcurrentDuplicateAndUnavailableStore(t *testing.T) {
 	resetDatabase(t)
-	r := integrationRouter()
-	const n = 10
-	results := make(chan int, n)
+	r := integrationRouter(integrationPool, integrationPool)
+	const attempts = 10
+	results := make(chan int, attempts)
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := 0; i < attempts; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			results <- integrationPost(r, "Concurrent", "Concurrent@Example.Test", "198.51.100."+string(rune('1'+i))).Code
+			results <- integrationPost(r, `{"email":"Concurrent@Example.Test"}`, "198.51.100."+string(rune('1'+i))).Code
 		}(i)
 	}
 	wg.Wait()
 	close(results)
-	created, conflict, other := 0, 0, 0
 	for status := range results {
-		switch status {
-		case 201:
-			created++
-		case 409:
-			conflict++
-		default:
-			other++
+		if status != http.StatusAccepted {
+			t.Fatalf("concurrent response = %d", status)
 		}
 	}
-	if created != 1 || conflict != n-1 || other != 0 {
-		t.Fatalf("created=%d conflict=%d other=%d", created, conflict, other)
-	}
 	var count int
-	if err := integrationPool.QueryRow(context.Background(), `SELECT count(*) FROM waitlist_entries WHERE email_normalized='concurrent@example.test'`).Scan(&count); err != nil || count != 1 {
+	if err := integrationPool.QueryRow(context.Background(), `SELECT count(*) FROM waitlist_entries WHERE email_normalized = 'concurrent@example.test'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
-	config, err := pgxpool.ParseConfig("postgres://rmp_test:rmp_test_only@127.0.0.1:1/unavailable?sslmode=disable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.ConnConfig.ConnectTimeout = 100 * time.Millisecond
-	unavailable, err := pgxpool.NewWithConfig(context.Background(), config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer unavailable.Close()
-	w := integrationPost(newRouter(unavailable, "http://localhost:3000", newLimiter(nil)), "Unavailable", "unavailable@example.test", "203.0.113.99")
-	if w.Code != 500 || errorCode(t, w) != internalCode || strings.Contains(strings.ToLower(w.Body.String()), "connect") {
+
+	unavailable := integrationRouter(errorStore{err: errors.New("database unavailable")}, errorReadiness{err: errors.New("database unavailable")})
+	w := integrationPost(unavailable, `{"email":"unavailable@example.test"}`, "203.0.113.99")
+	if w.Code != http.StatusInternalServerError || errorCode(t, w) != httpapi.InternalCode || strings.Contains(strings.ToLower(w.Body.String()), "database") {
 		t.Fatalf("unavailable %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestIntegrationReferralAndVerificationTokenConstraints(t *testing.T) {
+	resetDatabase(t)
+	ctx := context.Background()
+	var referrerID, referredID string
+	if err := integrationPool.QueryRow(ctx, `INSERT INTO waitlist_entries (email_normalized) VALUES ('referrer@example.test') RETURNING id::text`).Scan(&referrerID); err != nil {
+		t.Fatal(err)
+	}
+	if err := integrationPool.QueryRow(ctx, `INSERT INTO waitlist_entries (email_normalized) VALUES ('referred@example.test') RETURNING id::text`).Scan(&referredID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO referral_events (referrer_id, referred_entry_id) VALUES ($1, $2)`, referrerID, referredID); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{
+		`INSERT INTO referral_events (referrer_id, referred_entry_id) VALUES ('` + referrerID + `', '` + referredID + `')`,
+		`INSERT INTO referral_events (referrer_id, referred_entry_id) VALUES ('` + referrerID + `', '` + referrerID + `')`,
+	} {
+		if _, err := integrationPool.Exec(ctx, query); err == nil {
+			t.Fatalf("constraint accepted %q", query)
+		}
+	}
+	var tokenEntryID string
+	if err := integrationPool.QueryRow(ctx, `INSERT INTO waitlist_entries (email_normalized) VALUES ('token-entry@example.test') RETURNING id::text`).Scan(&tokenEntryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO waitlist_verification_tokens (entry_id, token_hash, purpose, expires_at) VALUES ($1, 'hash-one', 'status_access', CURRENT_TIMESTAMP + interval '15 minutes')`, tokenEntryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO waitlist_verification_tokens (entry_id, token_hash, purpose, expires_at) VALUES ($1, 'hash-one', 'status_access', CURRENT_TIMESTAMP)`, tokenEntryID); err == nil {
+		t.Fatal("duplicate hash accepted")
+	}
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO waitlist_verification_tokens (entry_id, token_hash, purpose, expires_at) VALUES ($1, 'hash-two', 'other', CURRENT_TIMESTAMP)`, tokenEntryID); err == nil {
+		t.Fatal("invalid purpose accepted")
+	}
+	if _, err := integrationPool.Exec(ctx, `DELETE FROM waitlist_entries WHERE id = $1`, tokenEntryID); err != nil {
+		t.Fatal(err)
+	}
+	var tokens int
+	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM waitlist_verification_tokens WHERE entry_id = $1`, tokenEntryID).Scan(&tokens); err != nil || tokens != 0 {
+		t.Fatalf("cascade tokens=%d err=%v", tokens, err)
+	}
+}
+
+type errorStore struct{ err error }
+
+func (s errorStore) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, s.err
+}
+
+type errorReadiness struct{ err error }
+
+func (r errorReadiness) Ping(context.Context) error { return r.err }

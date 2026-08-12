@@ -1,5 +1,28 @@
 # Waitlist database
 
-The repository-owned development PostgreSQL 16 service is bound only to `127.0.0.1:5433`. It uses `backend/migrations/001_waitlist_entries.up.sql`, `002_waitlist_entries_name_optional.up.sql`, and their paired down migrations. The sole table, `waitlist_entries`, has a PostgreSQL-generated UUID, a bounded optional (nullable) name, bounded unique normalized email, and PostgreSQL-generated timestamp. `name` is nullable so the email-only `/waitlist` page can sign up without collecting a name; when provided it is still bounded to 1–100 characters by the existing check constraint. It has no health, prescription, referral, ranking, or administrative fields.
+The repository-owned development PostgreSQL 16 service is bound only to
+`127.0.0.1:5433`. Current schema is supplied by
+`backend/migrations/001_waitlist_entries.up.sql`,
+`002_waitlist_entries_name_optional.up.sql`, and
+`003_waitlist_referral_consent.up.sql`. `waitlist_entries` has a PostgreSQL
+UUID, bounded optional nullable name, bounded unique normalized email, and
+server-generated timestamps. Migration 003 adds nullable staged
+`referral_code`, `referred_by_id`, `status_token_hash`, `consent_version`, and
+`consented_at` fields, plus `updated_at`. It has no health or prescription data.
 
-Do not run the down migration against the development database. The intended disposable integration database is separately named and bound only to 127.0.0.1:5434 through `docker-compose.test.yml`; it must be torn down with its own Compose project and volume only.
+Migration 003 is forward-only and deliberately leaves all newly introduced
+consent, referral, and status columns NULL for existing records. No consent,
+referral, or token data is fabricated or backfilled. B2A only writes consent
+columns when a valid future-style consent payload is supplied; it does not yet
+generate or expose referral codes or status tokens. Migration 004 remains
+reserved for the later referral-event work.
+
+Migration 004 now provides B3A-only internal foundations: constrained
+`referral_events` and hash-only `waitlist_verification_tokens`. It does not
+enable referral attribution, status access, public B3 endpoints, real email,
+or generate values for historical rows.
+
+Do not run down migrations against the development database. The disposable
+integration database is separately bound to `127.0.0.1:5434` through
+`docker-compose.test.yml` and must be torn down only with its own Compose
+project and volume.

@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 
-type Status = "idle" | "loading" | "success" | "error" | "duplicate";
+type Status = "idle" | "loading" | "success" | "error";
 
 const errorMessages: Record<string, string> = {
   WAITLIST_VALIDATION_ERROR: "Enter a valid email address.",
@@ -35,8 +35,8 @@ export function WaitlistEmailForm() {
     event.preventDefault();
     if (status === "loading") return;
 
-    // ponytail: client-side honeypot only — never sent to the API, which
-    // rejects unknown fields. Real abuse protection is the server rate limit.
+    // Client-side honeypot. A populated value does not submit from this form;
+    // the API also accepts this documented field for server-side bot handling.
     const honeypot = (
       event.currentTarget.elements.namedItem("company") as HTMLInputElement
     )?.value;
@@ -59,18 +59,15 @@ export function WaitlistEmailForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: normalizedEmail }),
       });
-      if (response.status === 201) {
+      if (response.status === 202) {
         setStatus("success");
-        setMessage("We'll email you the moment early access opens.");
+        setMessage(
+          "Thanks — if this email is eligible, your waitlist request has been received.",
+        );
         return;
       }
       const body = await response.json().catch(() => null);
       const code = body?.error?.code as string | undefined;
-      if (code === "WAITLIST_EMAIL_EXISTS") {
-        setStatus("duplicate");
-        setMessage("Looks like this email is already on the waitlist.");
-        return;
-      }
       setStatus("error");
       setMessage(
         (code && errorMessages[code]) ??
@@ -168,7 +165,6 @@ export function WaitlistEmailForm() {
           className={cn(
             "mt-3 min-h-5 text-center text-small",
             status === "error" && "font-bold text-error",
-            status === "duplicate" && "font-bold text-terracotta-deep",
           )}
         >
           {message}
