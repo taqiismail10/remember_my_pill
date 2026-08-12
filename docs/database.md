@@ -17,6 +17,11 @@ columns when a valid future-style consent payload is supplied; it does not yet
 generate or expose referral codes or status tokens. Migration 004 remains
 reserved for the later referral-event work.
 
+Migration 004 now provides B3A-only internal foundations: constrained
+`referral_events` and hash-only `waitlist_verification_tokens`. It does not
+enable referral attribution, status access, public B3 endpoints, real email,
+or generate values for historical rows.
+
 Do not run down migrations against the development database. The disposable
 integration database is separately bound to `127.0.0.1:5434` through
 `docker-compose.test.yml` and must be torn down only with its own Compose

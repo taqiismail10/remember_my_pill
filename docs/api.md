@@ -44,3 +44,7 @@ contracts in [backend-phase-b1-contract.md](backend-phase-b1-contract.md).
 B2A implements only the consent transition, duplicate privacy, readiness, and
 proxy/request-ID foundations. Status, referral, token issuance, and admin APIs
 remain unimplemented.
+
+B3A adds no public endpoints. Its referral-event, verification-token, and
+status-token primitives are internal only and remain disabled until B2B is
+approved and later B3 activation work is authorized.

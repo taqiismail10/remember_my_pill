@@ -12,7 +12,7 @@ Tear down only that project with
 `docker compose -f docker-compose.test.yml -p rmp-phase2-test down -v`.
 
 The canonical migration harness applies the embedded ordered sequence
-`001 → 002 → 003`, validates legacy pre-consent rows, and checks down/up
+`001 → 002 → 003 → 004`, validates legacy pre-consent rows, and checks down/up
 reversal before resetting the disposable database for handler coverage.
 
 ## Later acceptance coverage
@@ -33,8 +33,9 @@ Before B2–B6 are declared complete, tests must cover:
 - complete ordered migration lifecycle `001 → 002 → 003 → 004`, including
   paired down migrations, against disposable PostgreSQL.
 
-Migration 004 is not yet implemented. Add it to the one ordered migration list
-when B3 introduces the referral-event schema.
+Migration 004 is implemented for B3A internal schema coverage only. Tests must
+continue to verify its referral and verification-token constraints without
+enabling public B3 routes or real email.
 
 On this Windows host, `go test -race ./...` is not executable because `cc1.exe`
 reports `64-bit mode not compiled in`. Use a 64-bit-capable C toolchain in a

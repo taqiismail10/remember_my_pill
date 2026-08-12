@@ -60,8 +60,10 @@ func orderedMigrations(t *testing.T) []migrations.Migration {
 
 func dropWaitlist(t *testing.T) {
 	t.Helper()
-	if _, err := integrationPool.Exec(context.Background(), "DROP TABLE IF EXISTS waitlist_entries CASCADE"); err != nil {
-		t.Fatal(err)
+	for _, table := range []string{"waitlist_verification_tokens", "referral_events", "waitlist_entries"} {
+		if _, err := integrationPool.Exec(context.Background(), "DROP TABLE IF EXISTS "+table+" CASCADE"); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -112,8 +114,8 @@ func TestIntegrationMigrationLifecycleAndLegacyConsent(t *testing.T) {
 	applyDown(t, items)
 	applyUp(t, items)
 	var exists bool
-	if err := integrationPool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'waitlist_entries' AND column_name = 'updated_at')`).Scan(&exists); err != nil || !exists {
-		t.Fatalf("full up/down/up did not restore migration 003 schema: exists=%v err=%v", exists, err)
+	if err := integrationPool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'waitlist_verification_tokens')`).Scan(&exists); err != nil || !exists {
+		t.Fatalf("full up/down/up did not restore migration 004 schema: exists=%v err=%v", exists, err)
 	}
 
 	// Exercise the legacy path separately. Migration 002 intentionally makes
@@ -241,6 +243,49 @@ func TestIntegrationConcurrentDuplicateAndUnavailableStore(t *testing.T) {
 	w := integrationPost(unavailable, `{"email":"unavailable@example.test"}`, "203.0.113.99")
 	if w.Code != http.StatusInternalServerError || errorCode(t, w) != httpapi.InternalCode || strings.Contains(strings.ToLower(w.Body.String()), "database") {
 		t.Fatalf("unavailable %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestIntegrationReferralAndVerificationTokenConstraints(t *testing.T) {
+	resetDatabase(t)
+	ctx := context.Background()
+	var referrerID, referredID string
+	if err := integrationPool.QueryRow(ctx, `INSERT INTO waitlist_entries (email_normalized) VALUES ('referrer@example.test') RETURNING id::text`).Scan(&referrerID); err != nil {
+		t.Fatal(err)
+	}
+	if err := integrationPool.QueryRow(ctx, `INSERT INTO waitlist_entries (email_normalized) VALUES ('referred@example.test') RETURNING id::text`).Scan(&referredID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO referral_events (referrer_id, referred_entry_id) VALUES ($1, $2)`, referrerID, referredID); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{
+		`INSERT INTO referral_events (referrer_id, referred_entry_id) VALUES ('` + referrerID + `', '` + referredID + `')`,
+		`INSERT INTO referral_events (referrer_id, referred_entry_id) VALUES ('` + referrerID + `', '` + referrerID + `')`,
+	} {
+		if _, err := integrationPool.Exec(ctx, query); err == nil {
+			t.Fatalf("constraint accepted %q", query)
+		}
+	}
+	var tokenEntryID string
+	if err := integrationPool.QueryRow(ctx, `INSERT INTO waitlist_entries (email_normalized) VALUES ('token-entry@example.test') RETURNING id::text`).Scan(&tokenEntryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO waitlist_verification_tokens (entry_id, token_hash, purpose, expires_at) VALUES ($1, 'hash-one', 'status_access', CURRENT_TIMESTAMP + interval '15 minutes')`, tokenEntryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO waitlist_verification_tokens (entry_id, token_hash, purpose, expires_at) VALUES ($1, 'hash-one', 'status_access', CURRENT_TIMESTAMP)`, tokenEntryID); err == nil {
+		t.Fatal("duplicate hash accepted")
+	}
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO waitlist_verification_tokens (entry_id, token_hash, purpose, expires_at) VALUES ($1, 'hash-two', 'other', CURRENT_TIMESTAMP)`, tokenEntryID); err == nil {
+		t.Fatal("invalid purpose accepted")
+	}
+	if _, err := integrationPool.Exec(ctx, `DELETE FROM waitlist_entries WHERE id = $1`, tokenEntryID); err != nil {
+		t.Fatal(err)
+	}
+	var tokens int
+	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM waitlist_verification_tokens WHERE entry_id = $1`, tokenEntryID).Scan(&tokens); err != nil || tokens != 0 {
+		t.Fatalf("cascade tokens=%d err=%v", tokens, err)
 	}
 }
 

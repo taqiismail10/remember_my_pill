@@ -18,3 +18,6 @@ The future admin credential is environment-provided and header-based; never
 place credentials in a query string or local documentation. See
 [backend-phase-b1-contract.md](backend-phase-b1-contract.md) for the locked
 contract and legacy-consent policy.
+
+B3A has no email provider configuration and sends no email. Its internal token
+and referral foundations remain inactive while B2B consent approval is pending.
