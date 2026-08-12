@@ -26,7 +26,7 @@ func TestGenerateTokenAndHash(t *testing.T) {
 
 func TestFakeEmailSender(t *testing.T) {
 	fake := &FakeEmailSender{Result: DeliveryAccepted}
-	if got := fake.SendStatusAccessEmail(context.Background(), StatusAccessEmail{To: "person@example.test", VerificationToken: "raw"}); got != DeliveryAccepted || len(fake.Sent) != 1 {
+	if got := fake.SendStatusAccessEmail(context.Background(), StatusAccessEmail{To: "person@example.test", VerificationURL: "https://rmp.example.test/waitlist/status-access?verification_token=test"}); got != DeliveryAccepted || len(fake.Sent) != 1 {
 		t.Fatalf("result=%q sent=%d", got, len(fake.Sent))
 	}
 }

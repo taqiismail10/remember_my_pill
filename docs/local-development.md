@@ -21,3 +21,11 @@ contract and legacy-consent policy.
 
 B3A has no email provider configuration and sends no email. Its internal token
 and referral foundations remain inactive while B2B consent approval is pending.
+
+B3B adds a disabled provider foundation. Keep `EMAIL_PROVIDER=fake` for normal
+local development and tests; it needs no credentials and never contacts a
+provider. `EMAIL_PROVIDER=postmark` is an explicit opt-in and requires the
+validated placeholders in `.env.example`, including a secret
+`POSTMARK_SERVER_TOKEN`. It does not activate routes or send email by itself.
+The final status-access template and B2B/legacy-consent approval are still
+required before delivery can be enabled.

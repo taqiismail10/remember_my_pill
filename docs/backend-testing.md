@@ -37,6 +37,11 @@ Migration 004 is implemented for B3A internal schema coverage only. Tests must
 continue to verify its referral and verification-token constraints without
 enabling public B3 routes or real email.
 
+B3B adapter tests use `EMAIL_PROVIDER=fake` or a local mocked Postmark HTTP
+server. `go test ./...` must never call Postmark. A manual sandbox smoke test
+may use the provider's documented test token only when explicitly requested;
+it is not part of automated verification.
+
 On this Windows host, `go test -race ./...` is not executable because `cc1.exe`
 reports `64-bit mode not compiled in`. Use a 64-bit-capable C toolchain in a
 future environment; do not treat the race suite as passing here.

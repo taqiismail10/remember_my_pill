@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"remember_my_pill/backend/internal/access"
 	"remember_my_pill/backend/internal/config"
 	"remember_my_pill/backend/internal/httpapi"
 )
@@ -21,6 +22,10 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("startup configuration failed")
+		os.Exit(1)
+	}
+	if _, err := access.NewEmailSender(access.ProviderConfig{Provider: cfg.EmailProvider, FromAddress: cfg.EmailFromAddress, FromName: cfg.EmailFromName, MessageStream: cfg.PostmarkMessageStream, PostmarkServerToken: cfg.PostmarkServerToken, PostmarkTemplateAlias: cfg.PostmarkStatusAccessTemplate}); err != nil {
+		logger.Error("email provider configuration failed")
 		os.Exit(1)
 	}
 
@@ -47,7 +52,7 @@ func main() {
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		logger.Info("server started", "port", cfg.Port, "consent_configured", cfg.ConsentVersion != "", "trusted_proxy_count", len(cfg.TrustedProxies))
+		logger.Info("server started", "port", cfg.Port, "consent_configured", cfg.ConsentVersion != "", "trusted_proxy_count", len(cfg.TrustedProxies), "email_provider", cfg.EmailProvider)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("server stopped unexpectedly")
 			os.Exit(1)

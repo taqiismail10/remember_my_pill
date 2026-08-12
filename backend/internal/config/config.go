@@ -12,19 +12,36 @@ import (
 var consentVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,29}$`)
 
 type Config struct {
-	DatabaseURL    string
-	AllowedOrigin  string
-	Port           string
-	ConsentVersion string
-	TrustedProxies []netip.Prefix
+	DatabaseURL                  string
+	AllowedOrigin                string
+	Port                         string
+	ConsentVersion               string
+	TrustedProxies               []netip.Prefix
+	EmailProvider                string
+	EmailFromAddress             string
+	EmailFromName                string
+	StatusAccessBaseURL          string
+	PostmarkServerToken          string
+	PostmarkMessageStream        string
+	PostmarkStatusAccessTemplate string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		DatabaseURL:    os.Getenv("DATABASE_URL"),
-		AllowedOrigin:  os.Getenv("ALLOWED_ORIGIN"),
-		Port:           os.Getenv("PORT"),
-		ConsentVersion: os.Getenv("CONSENT_VERSION"),
+		DatabaseURL:                  os.Getenv("DATABASE_URL"),
+		AllowedOrigin:                os.Getenv("ALLOWED_ORIGIN"),
+		Port:                         os.Getenv("PORT"),
+		ConsentVersion:               os.Getenv("CONSENT_VERSION"),
+		EmailProvider:                strings.ToLower(strings.TrimSpace(os.Getenv("EMAIL_PROVIDER"))),
+		EmailFromAddress:             strings.TrimSpace(os.Getenv("EMAIL_FROM_ADDRESS")),
+		EmailFromName:                strings.TrimSpace(os.Getenv("EMAIL_FROM_NAME")),
+		StatusAccessBaseURL:          strings.TrimSpace(os.Getenv("STATUS_ACCESS_BASE_URL")),
+		PostmarkServerToken:          strings.TrimSpace(os.Getenv("POSTMARK_SERVER_TOKEN")),
+		PostmarkMessageStream:        strings.TrimSpace(os.Getenv("POSTMARK_MESSAGE_STREAM")),
+		PostmarkStatusAccessTemplate: strings.TrimSpace(os.Getenv("POSTMARK_STATUS_ACCESS_TEMPLATE")),
+	}
+	if cfg.EmailProvider == "" {
+		cfg.EmailProvider = "fake"
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8080"
@@ -43,7 +60,44 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.TrustedProxies = proxies
+	if err := validateEmailProvider(cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+func validateEmailProvider(cfg Config) error {
+	if cfg.EmailProvider == "fake" {
+		return nil
+	}
+	if cfg.EmailProvider != "postmark" {
+		return fmt.Errorf("EMAIL_PROVIDER must be fake or postmark")
+	}
+	if !validEmailAddress(cfg.EmailFromAddress) || cfg.EmailFromName == "" || strings.ContainsAny(cfg.EmailFromName, "\r\n") || cfg.PostmarkServerToken == "" || !validMessageStream(cfg.PostmarkMessageStream) || !validStatusAccessBaseURL(cfg.StatusAccessBaseURL) {
+		return fmt.Errorf("postmark email configuration is incomplete or invalid")
+	}
+	return nil
+}
+
+func validEmailAddress(value string) bool {
+	return len(value) <= 255 && strings.Count(value, "@") == 1 && !strings.ContainsAny(value, " \t\r\n") && strings.Contains(strings.Split(value, "@")[1], ".")
+}
+
+func validMessageStream(value string) bool {
+	if value == "" || len(value) > 80 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func validStatusAccessBaseURL(value string) bool {
+	u, err := url.ParseRequestURI(value)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.RawQuery == "" && u.Fragment == ""
 }
 
 func ValidAllowedOrigin(value string) bool {

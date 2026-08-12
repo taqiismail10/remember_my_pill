@@ -48,3 +48,9 @@ remain unimplemented.
 B3A adds no public endpoints. Its referral-event, verification-token, and
 status-token primitives are internal only and remain disabled until B2B is
 approved and later B3 activation work is authorized.
+
+B3B adds a disabled transactional-email adapter only. The router does not
+register `POST /api/waitlist/status-access/request`,
+`POST /api/waitlist/status-access/exchange`, `GET /api/waitlist/status`, a
+referral-resolve route, or a Postmark webhook endpoint. See
+[B3B email infrastructure](backend-phase-b3b-email-infrastructure.md).
