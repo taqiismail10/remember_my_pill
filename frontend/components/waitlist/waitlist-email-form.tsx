@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useId, useState } from "react";
+import Link from "next/link";
 import { CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
 import { Mascot } from "@/components/brand/mascot";
 import { BrandButton } from "@/components/ui/button";
@@ -28,6 +29,9 @@ export function WaitlistEmailForm() {
   const [message, setMessage] = useState("");
   const [email, setEmail] = useState("");
   const [invalid, setInvalid] = useState(false);
+  const [waitlistConsent, setWaitlistConsent] = useState(false);
+  const [marketingConsent, setMarketingConsent] = useState(false);
+  const [consentInvalid, setConsentInvalid] = useState(false);
   const emailId = useId();
   const statusId = useId();
 
@@ -49,15 +53,30 @@ export function WaitlistEmailForm() {
       setMessage("Enter a valid email address.");
       return;
     }
+    if (!waitlistConsent) {
+      setStatus("error");
+      setConsentInvalid(true);
+      setMessage("Please confirm the required waitlist consent.");
+      return;
+    }
 
     setInvalid(false);
+    setConsentInvalid(false);
     setStatus("loading");
     setMessage("Joining the waitlist…");
     try {
       const response = await fetch(`${apiBase}/api/waitlist`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: normalizedEmail }),
+        body: JSON.stringify({
+          email: normalizedEmail,
+          consent: true,
+          consentVersion: "waitlist-consent-v1",
+          marketingConsent,
+          marketingConsentVersion: marketingConsent
+            ? "marketing-consent-v1"
+            : null,
+        }),
       });
       if (response.status === 202) {
         setStatus("success");
@@ -106,8 +125,8 @@ export function WaitlistEmailForm() {
         Be first to know when Remember My Pill is ready.
       </h1>
       <p className="mt-3 text-body text-muted">
-        Join the launch waitlist. We&apos;ll only email you when early access
-        opens — nothing else.
+        Join the launch waitlist for the USA + Canada adult pilot. This is a
+        pilot draft; launch terms and legal details are not yet final.
       </p>
 
       <form onSubmit={submit} noValidate className="mt-6 text-left">
@@ -145,6 +164,51 @@ export function WaitlistEmailForm() {
           )}
         />
 
+        <fieldset
+          className="mt-4 space-y-3"
+          aria-describedby={consentInvalid ? statusId : undefined}
+        >
+          <legend className="sr-only">Email consents</legend>
+          <label className="flex cursor-pointer items-start gap-3 rounded-control border border-border bg-surface p-3.5 text-small text-ink">
+            <input
+              type="checkbox"
+              checked={waitlistConsent}
+              onChange={(event) => setWaitlistConsent(event.target.checked)}
+              disabled={isLoading}
+              aria-invalid={consentInvalid}
+              className="mt-0.5 size-4 shrink-0 accent-green"
+            />
+            <span>
+              I agree to join the Remember My Pill waitlist and receive emails
+              necessary to manage my waitlist participation and notify me about
+              the RMP pilot and launch. I understand that I can withdraw from
+              the waitlist at any time. See the{" "}
+              <Link
+                href="/privacy"
+                className="font-bold text-terracotta-deep underline"
+              >
+                Privacy Policy
+              </Link>
+              .
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-3 rounded-control border border-border bg-surface p-3.5 text-small text-ink">
+            <input
+              type="checkbox"
+              checked={marketingConsent}
+              onChange={(event) => setMarketingConsent(event.target.checked)}
+              disabled={isLoading}
+              className="mt-0.5 size-4 shrink-0 accent-green"
+            />
+            <span>
+              I would also like to receive Remember My Pill product news,
+              feature updates, surveys, educational content, promotions, and
+              special offers by email. I understand that I can unsubscribe from
+              marketing emails at any time.
+            </span>
+          </label>
+        </fieldset>
+
         <BrandButton
           type="submit"
           variant="primary"
@@ -176,8 +240,8 @@ export function WaitlistEmailForm() {
           className="mt-0.5 size-4 shrink-0 text-green"
           aria-hidden="true"
         />
-        We store only your email. No prescriptions, medication details, or
-        health information — ever.
+        The waitlist stores only your email and consent choices. Do not submit
+        prescriptions, medication details, or other health information here.
       </p>
     </div>
   );

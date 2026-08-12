@@ -20,6 +20,7 @@ func Ordered() ([]Migration, error) {
 		"002_waitlist_entries_name_optional",
 		"003_waitlist_referral_consent",
 		"004_referral_events_access_tokens",
+		"005_waitlist_marketing_consent",
 	}
 	migrations := make([]Migration, 0, len(names))
 	for _, name := range names {

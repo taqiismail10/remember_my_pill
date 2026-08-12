@@ -4,9 +4,11 @@
 
 `frontend/` is a full Next.js marketing site built on an RMP design-token layer (Tailwind v4 `@theme`), translated from the official Figma brand identity: header/hero, problem framing, a Snap → Understand → Act story, an original tabbed product-preview (Today / Add medication / Reminder screens, illustrating the PRD's described mobile UI — not real screenshots, none exist in Figma), a caregiver section, benefit and privacy/trust cards, an honest "how the waitlist works" bridge, a waitlist CTA, an FAQ, and a footer. Motion uses Framer Motion with `prefers-reduced-motion` respected globally.
 
-`/waitlist` is a dedicated, single-viewport, email-only signup page (`frontend/app/waitlist/page.tsx`); every high-intent CTA on the landing page routes there instead of embedding the form inline.
+`/waitlist` is a dedicated, responsive email signup page (`frontend/app/waitlist/page.tsx`); every high-intent CTA on the landing page routes there instead of embedding the form inline. It presents an unchecked required waitlist consent and a separate optional marketing consent for the USA + Canada adult-pilot draft. It does not collect medication, prescription, or other health information.
 
-The waitlist API stores a required, normalized email and an optional name (Phase 2 + the email-only `/waitlist` page): it does not process prescriptions, collect medication data, provide medical guidance, or implement referrals, rank, or consent persistence. The site's copy is written to match this exactly — it does not promise referral links, waitlist rank, or a consent record the backend does not have.
+The waitlist API stores a normalized email, optional name, and server-generated consent evidence. Required `waitlist-consent-v1` and optional `marketing-consent-v1` are persisted independently; historical rows are not backfilled. The legal-content activation flag defaults off, and the pilot is not publicly approved or launched. Status access, referrals, rank, Postmark delivery, and webhooks remain inactive.
+
+Pilot-draft legal pages are available at [/privacy](frontend/app/privacy/page.tsx) and [/consumer-health-data-privacy](frontend/app/consumer-health-data-privacy/page.tsx). They are not final legal notices. A legal operator, business mailing address, final external review, and approved Terms of Use remain required before launch; `/terms` is intentionally absent rather than containing invented terms. See [the B2B-Prep record](docs/backend-phase-b2b-prep.md).
 
 Product requirements are maintained in [the RMP PRD](docs/product/rmp-prd.md); supplementary design references are in [docs/design/references](docs/design/references/).
 

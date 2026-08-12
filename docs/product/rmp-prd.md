@@ -7,8 +7,8 @@
 | Field | Detail |
 | --- | --- |
 | **Product name** | Remember My Pill (RMP) |
-| **Document version** | 1.2.0 |
-| **Last updated** | 16 July 2026 |
+| **Document version** | 1.2.1 |
+| **Last updated** | 13 August 2026 |
 | **Primary deliverable** | Premium marketing website, product showcase and viral waitlist |
 | **Frontend** | Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, Framer Motion, Lucide Icons |
 | **Backend** | Go with Chi or Gin |
@@ -29,6 +29,15 @@
 - Added design-token and brand-asset folders to the repository structure.
 - Removed the duplicated raw-markdown copy that previously appeared at the end of the document.
 - Replaced hard-coded production secrets with safe placeholders and strengthened deployment guidance.
+
+### Version 1.2.1 Update Summary
+
+- Added a disabled USA + Canada adults-18+ pilot privacy/consent foundation:
+  required waitlist consent, independent optional marketing consent, and
+  pilot-draft privacy routes.
+- Confirmed that legal identity, mailing address, external legal review, and
+  final Terms of Use remain launch blockers; this update does not approve or
+  activate a public pilot, referrals, status access, or email delivery.
 
 ---
 

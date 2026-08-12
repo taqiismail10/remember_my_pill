@@ -10,12 +10,6 @@ const viewports = [
   { name: "1440", width: 1440, height: 1000 },
 ];
 
-const oneViewportTargets = [
-  { name: "1366x768", width: 1366, height: 768 },
-  { name: "1440x900", width: 1440, height: 900 },
-  { name: "1920x1080", width: 1920, height: 1080 },
-];
-
 test("waitlist page is responsive with no horizontal overflow", async ({
   page,
 }) => {
@@ -30,7 +24,8 @@ test("waitlist page is responsive with no horizontal overflow", async ({
         name: /be first to know when remember my pill is ready/i,
       }),
     ).toBeVisible();
-    await expect(page.getByLabel("Email")).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Email" })).toBeVisible();
+    await expect(page.getByRole("checkbox")).toHaveCount(2);
     await expect(
       page.getByRole("button", { name: "Join the waitlist" }),
     ).toBeVisible();
@@ -40,40 +35,25 @@ test("waitlist page is responsive with no horizontal overflow", async ({
   }
 });
 
-test("waitlist page fits within one viewport on common desktop sizes", async ({
-  page,
-}) => {
-  await page.goto("/waitlist");
-  for (const target of oneViewportTargets) {
-    await page.setViewportSize(target);
-    const { scrollHeight, innerHeight } = await page.evaluate(() => ({
-      scrollHeight: document.body.scrollHeight,
-      innerHeight: window.innerHeight,
-    }));
-    expect(scrollHeight).toBeLessThanOrEqual(innerHeight);
-  }
-});
-
-test("waitlist page has only an email field, validates it, and supports keyboard submission", async ({
+test("waitlist page requires consent, sends no name, and supports keyboard submission", async ({
   page,
 }) => {
   await page.goto("/waitlist");
 
-  await expect(page.getByLabel("Email")).toHaveAttribute("type", "email");
-  await expect(page.getByLabel("Email")).toHaveAttribute(
-    "autocomplete",
-    "email",
-  );
+  const email = page.getByRole("textbox", { name: "Email" });
+  await expect(email).toHaveAttribute("type", "email");
+  await expect(email).toHaveAttribute("autocomplete", "email");
   await expect(page.getByLabel("Name")).toHaveCount(0);
 
   // Invalid email is rejected inline without a network call.
-  await page.getByLabel("Email").fill("not-an-email");
+  await email.fill("not-an-email");
   await page.getByRole("button", { name: "Join the waitlist" }).click();
   await expect(page.getByText(/enter a valid email address/i)).toBeVisible();
 
   // A valid email submits via the keyboard; the local dev backend isn't
   // running for this suite, so this also exercises the network-error path.
-  await page.getByLabel("Email").fill("ada@example.com");
+  await email.fill("ada@example.com");
+  await page.getByRole("checkbox").first().check();
   await page.keyboard.press("Enter");
   await expect(
     page.getByText(/couldn't reach the waitlist service/i),

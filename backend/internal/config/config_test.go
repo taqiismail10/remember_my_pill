@@ -34,12 +34,24 @@ func TestValidateEmailProvider(t *testing.T) {
 }
 
 func TestLoadDefaultsToFakeWithoutPostmarkCredentials(t *testing.T) {
-	for _, key := range []string{"DATABASE_URL", "ALLOWED_ORIGIN", "PORT", "CONSENT_VERSION", "TRUSTED_PROXY_CIDRS", "EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "EMAIL_FROM_NAME", "STATUS_ACCESS_BASE_URL", "POSTMARK_SERVER_TOKEN", "POSTMARK_MESSAGE_STREAM", "POSTMARK_STATUS_ACCESS_TEMPLATE"} {
+	for _, key := range []string{"DATABASE_URL", "ALLOWED_ORIGIN", "PORT", "CONSENT_VERSION", "TRUSTED_PROXY_CIDRS", "EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "EMAIL_FROM_NAME", "STATUS_ACCESS_BASE_URL", "POSTMARK_SERVER_TOKEN", "POSTMARK_MESSAGE_STREAM", "POSTMARK_STATUS_ACCESS_TEMPLATE", "PILOT_LEGAL_CONTENT_APPROVED"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("DATABASE_URL", "postgres://example.test/db")
 	t.Setenv("ALLOWED_ORIGIN", "http://example.test")
 	if cfg, err := Load(); err != nil || cfg.EmailProvider != "fake" {
 		t.Fatalf("cfg=%+v err=%v", cfg, err)
+	}
+}
+
+func TestParseLegalContentApproval(t *testing.T) {
+	if value, err := parseBoolean("PILOT_LEGAL_CONTENT_APPROVED", "true"); err != nil || !value {
+		t.Fatalf("true=%v err=%v", value, err)
+	}
+	if value, err := parseBoolean("PILOT_LEGAL_CONTENT_APPROVED", "false"); err != nil || value {
+		t.Fatalf("false=%v err=%v", value, err)
+	}
+	if _, err := parseBoolean("PILOT_LEGAL_CONTENT_APPROVED", "yes"); err == nil {
+		t.Fatal("expected invalid boolean")
 	}
 }

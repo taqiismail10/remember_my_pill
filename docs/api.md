@@ -15,15 +15,19 @@ failures return `500 WAITLIST_INTERNAL_ERROR`. Invalid write attempts consume a
 limit attempt. Unknown JSON fields and trailing JSON are rejected; the request
 body limit is 4 KiB.
 
-B2A keeps the email-only client compatible: a payload containing only `email`
-(and optional `name`) is accepted as a truthful pre-consent record. A future
-client may instead send `consent: true` and `consentVersion`; the version must
-exactly match non-empty `CONSENT_VERSION`, and the server—not the client—sets
-the consent timestamp. Explicit `false`, missing paired consent fields, or a
-mismatched version is rejected. The `company` field is the documented
+For the pilot draft, the waitlist UI submits `consent: true` with exact
+`waitlist-consent-v1`, plus a separate `marketingConsent` choice. The server,
+not the client, sets both consent timestamps. A `marketingConsent: true`
+request requires exact `marketing-consent-v1`; a declined marketing choice
+stores neither marketing timestamp nor version. Explicit false required
+consent, missing paired consent fields, or a mismatched version is rejected.
+
+`PILOT_LEGAL_CONTENT_APPROVED=false` keeps the historical email-only API
+compatibility path available as a truthful pre-consent record. It cannot
+record a marketing opt-in. When the server-only flag is `true`, all new
+requests require `waitlist-consent-v1`. The `company` field is the documented
 honeypot: a non-empty value receives the same 202 response without an insert.
-`referralCode` is accepted only as a reserved future field and is not used or
-returned in B2A.
+`referralCode` is reserved and is not used or returned.
 
 `GET /health` is liveness-only and returns exactly `{"status":"ok"}`. `GET
 /ready` pings PostgreSQL and returns `200 {"status":"ready"}` only when the
@@ -54,3 +58,18 @@ register `POST /api/waitlist/status-access/request`,
 `POST /api/waitlist/status-access/exchange`, `GET /api/waitlist/status`, a
 referral-resolve route, or a Postmark webhook endpoint. See
 [B3B email infrastructure](backend-phase-b3b-email-infrastructure.md).
+
+## B2B-Prep pilot consent foundation
+
+The USA + Canada adult-pilot foundation recognizes `waitlist-consent-v1` and
+separate optional `marketing-consent-v1`. Required consent evidence uses the
+existing `consent_version` and server-generated `consented_at`; marketing
+evidence is independent and only recorded when `marketingConsent: true` is
+paired with its exact version. `marketingConsent: false` creates no marketing
+timestamp or version. Public responses remain generic `202` for new,
+duplicate, and honeypot requests.
+
+`PILOT_LEGAL_CONTENT_APPROVED` defaults to `false`. While false, legacy
+email-only compatibility remains in place; when true, it requires the exact
+waitlist consent version. This technical flag does not approve legal content,
+enable B3 routes, referrals, Postmark delivery, or any public pilot launch.

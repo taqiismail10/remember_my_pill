@@ -24,6 +24,7 @@ type Config struct {
 	PostmarkServerToken          string
 	PostmarkMessageStream        string
 	PostmarkStatusAccessTemplate string
+	PilotLegalContentApproved    bool
 }
 
 func Load() (Config, error) {
@@ -40,6 +41,11 @@ func Load() (Config, error) {
 		PostmarkMessageStream:        strings.TrimSpace(os.Getenv("POSTMARK_MESSAGE_STREAM")),
 		PostmarkStatusAccessTemplate: strings.TrimSpace(os.Getenv("POSTMARK_STATUS_ACCESS_TEMPLATE")),
 	}
+	legalApproved, err := parseBoolean("PILOT_LEGAL_CONTENT_APPROVED", os.Getenv("PILOT_LEGAL_CONTENT_APPROVED"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PilotLegalContentApproved = legalApproved
 	if cfg.EmailProvider == "" {
 		cfg.EmailProvider = "fake"
 	}
@@ -64,6 +70,17 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func parseBoolean(name, value string) (bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "false" {
+		return false, nil
+	}
+	if value == "true" {
+		return true, nil
+	}
+	return false, fmt.Errorf("%s must be true or false", name)
 }
 
 func validateEmailProvider(cfg Config) error {

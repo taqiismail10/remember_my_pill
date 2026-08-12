@@ -93,9 +93,10 @@ func resetDatabase(t *testing.T) {
 
 func integrationRouter(store httpapi.Store, readiness httpapi.Readiness) http.Handler {
 	return httpapi.NewRouter(store, readiness, httpapi.Options{
-		AllowedOrigin:  "http://localhost:3000",
-		ConsentVersion: "policy-2026-08",
-		Logger:         slog.New(slog.NewTextHandler(ioDiscard{}, nil)),
+		AllowedOrigin:             "http://localhost:3000",
+		ConsentVersion:            "waitlist-consent-v1",
+		PilotLegalContentApproved: true,
+		Logger:                    slog.New(slog.NewTextHandler(ioDiscard{}, nil)),
 	})
 }
 
@@ -113,9 +114,9 @@ func TestIntegrationMigrationLifecycleAndLegacyConsent(t *testing.T) {
 	applyUp(t, items)
 	applyDown(t, items)
 	applyUp(t, items)
-	var exists bool
-	if err := integrationPool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'waitlist_verification_tokens')`).Scan(&exists); err != nil || !exists {
-		t.Fatalf("full up/down/up did not restore migration 004 schema: exists=%v err=%v", exists, err)
+	var migration005Columns int
+	if err := integrationPool.QueryRow(context.Background(), `SELECT count(*) FROM information_schema.columns WHERE table_name = 'waitlist_entries' AND column_name IN ('marketing_consented_at', 'marketing_consent_version', 'marketing_withdrawn_at')`).Scan(&migration005Columns); err != nil || migration005Columns != 3 {
+		t.Fatalf("full up/down/up did not restore migration 005 schema: columns=%d err=%v", migration005Columns, err)
 	}
 
 	// Exercise the legacy path separately. Migration 002 intentionally makes
@@ -130,16 +131,18 @@ func TestIntegrationMigrationLifecycleAndLegacyConsent(t *testing.T) {
 
 	var consentVersion *string
 	var consentedAt *time.Time
-	var referralCode, statusToken *string
-	if err := integrationPool.QueryRow(context.Background(), `SELECT consent_version, consented_at, referral_code, status_token_hash FROM waitlist_entries WHERE email_normalized = 'legacy@example.test'`).Scan(&consentVersion, &consentedAt, &referralCode, &statusToken); err != nil {
+	var referralCode, statusToken, marketingVersion *string
+	var marketingAt, marketingWithdrawnAt *time.Time
+	if err := integrationPool.QueryRow(context.Background(), `SELECT consent_version, consented_at, referral_code, status_token_hash, marketing_consent_version, marketing_consented_at, marketing_withdrawn_at FROM waitlist_entries WHERE email_normalized = 'legacy@example.test'`).Scan(&consentVersion, &consentedAt, &referralCode, &statusToken, &marketingVersion, &marketingAt, &marketingWithdrawnAt); err != nil {
 		t.Fatal(err)
 	}
-	if consentVersion != nil || consentedAt != nil || referralCode != nil || statusToken != nil {
-		t.Fatalf("legacy record was fabricated: consent=%v consented_at=%v referral=%v token=%v", consentVersion, consentedAt, referralCode, statusToken)
+	if consentVersion != nil || consentedAt != nil || referralCode != nil || statusToken != nil || marketingVersion != nil || marketingAt != nil || marketingWithdrawnAt != nil {
+		t.Fatalf("legacy record was fabricated: consent=%v consented_at=%v referral=%v token=%v marketing=%v marketing_at=%v marketing_withdrawn_at=%v", consentVersion, consentedAt, referralCode, statusToken, marketingVersion, marketingAt, marketingWithdrawnAt)
 	}
 
 	applyDown(t, items[2:])
 	applyUp(t, items[2:])
+	var exists bool
 	if err := integrationPool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'waitlist_entries' AND column_name = 'updated_at')`).Scan(&exists); err != nil || !exists {
 		t.Fatalf("migration 003 down/up did not restore schema: exists=%v err=%v", exists, err)
 	}
@@ -148,19 +151,21 @@ func TestIntegrationMigrationLifecycleAndLegacyConsent(t *testing.T) {
 func TestIntegrationPersistenceDuplicateConsentAndConstraints(t *testing.T) {
 	resetDatabase(t)
 	r := integrationRouter(integrationPool, integrationPool)
-	w := integrationPost(r, `{"name":"  Grace Hopper  ","email":" GRACE@EXAMPLE.TEST ","consent":true,"consentVersion":"policy-2026-08"}`, "203.0.113.1")
+	w := integrationPost(r, `{"name":"  Grace Hopper  ","email":" GRACE@EXAMPLE.TEST ","consent":true,"consentVersion":"waitlist-consent-v1","marketingConsent":true,"marketingConsentVersion":"marketing-consent-v1"}`, "203.0.113.1")
 	requireAccepted(t, w)
 
 	var id, name, email string
 	var created, consentedAt, updatedAt time.Time
-	var consentVersion string
-	if err := integrationPool.QueryRow(context.Background(), `SELECT id::text, name, email_normalized, created_at, consent_version, consented_at, updated_at FROM waitlist_entries WHERE email_normalized = 'grace@example.test'`).Scan(&id, &name, &email, &created, &consentVersion, &consentedAt, &updatedAt); err != nil {
+	var consentVersion, marketingVersion string
+	var marketingAt time.Time
+	var marketingWithdrawnAt *time.Time
+	if err := integrationPool.QueryRow(context.Background(), `SELECT id::text, name, email_normalized, created_at, consent_version, consented_at, updated_at, marketing_consent_version, marketing_consented_at, marketing_withdrawn_at FROM waitlist_entries WHERE email_normalized = 'grace@example.test'`).Scan(&id, &name, &email, &created, &consentVersion, &consentedAt, &updatedAt, &marketingVersion, &marketingAt, &marketingWithdrawnAt); err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(id) || name != "Grace Hopper" || email != "grace@example.test" || created.IsZero() || consentVersion != "policy-2026-08" || consentedAt.IsZero() || updatedAt.IsZero() {
-		t.Fatalf("stored id=%s name=%q email=%q created=%v consent=%q consentedAt=%v updatedAt=%v", id, name, email, created, consentVersion, consentedAt, updatedAt)
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(id) || name != "Grace Hopper" || email != "grace@example.test" || created.IsZero() || consentVersion != "waitlist-consent-v1" || consentedAt.IsZero() || updatedAt.IsZero() || marketingVersion != "marketing-consent-v1" || marketingAt.IsZero() || marketingWithdrawnAt != nil {
+		t.Fatalf("stored id=%s name=%q email=%q created=%v consent=%q consentedAt=%v updatedAt=%v marketing=%q marketingAt=%v marketingWithdrawnAt=%v", id, name, email, created, consentVersion, consentedAt, updatedAt, marketingVersion, marketingAt, marketingWithdrawnAt)
 	}
-	duplicate := integrationPost(r, `{"email":"GrAcE@Example.Test"}`, "203.0.113.2")
+	duplicate := integrationPost(r, `{"email":"GrAcE@Example.Test","consent":true,"consentVersion":"waitlist-consent-v1","marketingConsent":false}`, "203.0.113.2")
 	requireAccepted(t, duplicate)
 	var count int
 	if err := integrationPool.QueryRow(context.Background(), `SELECT count(*) FROM waitlist_entries WHERE email_normalized = 'grace@example.test'`).Scan(&count); err != nil || count != 1 {
@@ -190,14 +195,11 @@ func TestIntegrationEmailOnlyHoneypotAndReadiness(t *testing.T) {
 		t.Fatalf("ready=%d %s", ready.Code, ready.Body.String())
 	}
 
-	requireAccepted(t, integrationPost(r, `{"email":"compatibility@example.test"}`, "203.0.113.3"))
-	var name, consentVersion *string
-	var consentedAt *time.Time
-	if err := integrationPool.QueryRow(context.Background(), `SELECT name, consent_version, consented_at FROM waitlist_entries WHERE email_normalized = 'compatibility@example.test'`).Scan(&name, &consentVersion, &consentedAt); err != nil {
-		t.Fatal(err)
-	}
-	if name != nil || consentVersion != nil || consentedAt != nil {
-		t.Fatalf("compatibility record should remain unconsented: name=%v consent=%v consented_at=%v", name, consentVersion, consentedAt)
+	requireAccepted(t, integrationPost(r, `{"email":"marketing-false@example.test","consent":true,"consentVersion":"waitlist-consent-v1","marketingConsent":false}`, "203.0.113.3"))
+	var marketingVersion *string
+	var marketingAt, marketingWithdrawnAt *time.Time
+	if err := integrationPool.QueryRow(context.Background(), `SELECT marketing_consent_version, marketing_consented_at, marketing_withdrawn_at FROM waitlist_entries WHERE email_normalized = 'marketing-false@example.test'`).Scan(&marketingVersion, &marketingAt, &marketingWithdrawnAt); err != nil || marketingVersion != nil || marketingAt != nil || marketingWithdrawnAt != nil {
+		t.Fatalf("marketing false was fabricated: version=%v at=%v withdrawn_at=%v err=%v", marketingVersion, marketingAt, marketingWithdrawnAt, err)
 	}
 
 	requireAccepted(t, integrationPost(r, `{"email":"bot@example.test","company":"Bot Inc"}`, "203.0.113.4"))
@@ -224,7 +226,7 @@ func TestIntegrationConcurrentDuplicateAndUnavailableStore(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			results <- integrationPost(r, `{"email":"Concurrent@Example.Test"}`, "198.51.100."+string(rune('1'+i))).Code
+			results <- integrationPost(r, `{"email":"Concurrent@Example.Test","consent":true,"consentVersion":"waitlist-consent-v1","marketingConsent":false}`, "198.51.100."+string(rune('1'+i))).Code
 		}(i)
 	}
 	wg.Wait()
@@ -240,7 +242,7 @@ func TestIntegrationConcurrentDuplicateAndUnavailableStore(t *testing.T) {
 	}
 
 	unavailable := integrationRouter(errorStore{err: errors.New("database unavailable")}, errorReadiness{err: errors.New("database unavailable")})
-	w := integrationPost(unavailable, `{"email":"unavailable@example.test"}`, "203.0.113.99")
+	w := integrationPost(unavailable, `{"email":"unavailable@example.test","consent":true,"consentVersion":"waitlist-consent-v1","marketingConsent":false}`, "203.0.113.99")
 	if w.Code != http.StatusInternalServerError || errorCode(t, w) != httpapi.InternalCode || strings.Contains(strings.ToLower(w.Body.String()), "database") {
 		t.Fatalf("unavailable %d %s", w.Code, w.Body.String())
 	}

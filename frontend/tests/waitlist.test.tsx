@@ -26,7 +26,7 @@ describe("/waitlist page", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders a single accessible email field and no name field", () => {
+  it("renders email and two initially unchecked consent choices, with no name field", () => {
     render(<WaitlistPage />);
     const email = screen.getByLabelText("Email");
     expect(email).toBeInTheDocument();
@@ -34,6 +34,12 @@ describe("/waitlist page", () => {
     expect(email).toHaveAttribute("autoComplete", "email");
     expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/name/i)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    expect(screen.getAllByRole("checkbox")[0]).not.toBeChecked();
+    expect(screen.getAllByRole("checkbox")[1]).not.toBeChecked();
+    expect(
+      screen.getByRole("link", { name: "Privacy Policy" }),
+    ).toHaveAttribute("href", "/privacy");
   });
 
   it("has a heading and a link back to the homepage", () => {
@@ -62,18 +68,38 @@ describe("/waitlist page", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("submits only an email, never a name field", async () => {
+  it("requires waitlist consent before calling the API", () => {
+    render(<WaitlistPage />);
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "ada@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Join the waitlist" }));
+    expect(
+      screen.getByText(/confirm the required waitlist consent/i),
+    ).toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("submits separate required and optional consent values, never a name", async () => {
     vi.mocked(fetch).mockReturnValue(jsonResponse(202, { status: "accepted" }));
     render(<WaitlistPage />);
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: " Ada@Example.com " },
     });
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    fireEvent.click(screen.getAllByRole("checkbox")[1]);
     fireEvent.click(screen.getByRole("button", { name: "Join the waitlist" }));
 
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
     const [, init] = vi.mocked(fetch).mock.calls[0];
     const body = JSON.parse(init?.body as string);
-    expect(body).toEqual({ email: "ada@example.com" });
+    expect(body).toEqual({
+      email: "ada@example.com",
+      consent: true,
+      consentVersion: "waitlist-consent-v1",
+      marketingConsent: true,
+      marketingConsentVersion: "marketing-consent-v1",
+    });
   });
 
   it("shows a loading state and disables the button while submitting", async () => {
@@ -87,6 +113,7 @@ describe("/waitlist page", () => {
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "ada@example.com" },
     });
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
     fireEvent.click(screen.getByRole("button", { name: "Join the waitlist" }));
 
     const button = await screen.findByRole("button", { name: /joining/i });
@@ -101,6 +128,7 @@ describe("/waitlist page", () => {
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "ada@example.com" },
     });
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
     fireEvent.click(screen.getByRole("button", { name: "Join the waitlist" }));
 
     expect(
@@ -119,6 +147,7 @@ describe("/waitlist page", () => {
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "ada@example.com" },
     });
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
     fireEvent.click(screen.getByRole("button", { name: "Join the waitlist" }));
 
     expect(
@@ -132,6 +161,7 @@ describe("/waitlist page", () => {
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "ada@example.com" },
     });
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
     fireEvent.click(screen.getByRole("button", { name: "Join the waitlist" }));
 
     expect(
@@ -144,6 +174,7 @@ describe("/waitlist page", () => {
     render(<WaitlistPage />);
     const email = screen.getByLabelText("Email");
     fireEvent.change(email, { target: { value: "ada@example.com" } });
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
     fireEvent.submit(email.closest("form") as HTMLFormElement);
 
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));

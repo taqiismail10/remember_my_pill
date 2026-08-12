@@ -12,7 +12,7 @@ Tear down only that project with
 `docker compose -f docker-compose.test.yml -p rmp-phase2-test down -v`.
 
 The canonical migration harness applies the embedded ordered sequence
-`001 → 002 → 003 → 004`, validates legacy pre-consent rows, and checks down/up
+`001 → 002 → 003 → 004 → 005`, validates legacy pre-consent rows, and checks down/up
 reversal before resetting the disposable database for handler coverage.
 
 ## Later acceptance coverage
@@ -30,7 +30,7 @@ Before B2–B6 are declared complete, tests must cover:
 - admin authorization, CSV escaping, and no public admin CORS;
 - readiness with available/unavailable PostgreSQL;
 - trusted and untrusted proxy-header behavior; and
-- complete ordered migration lifecycle `001 → 002 → 003 → 004`, including
+- complete ordered migration lifecycle `001 → 002 → 003 → 004 → 005`, including
   paired down migrations, against disposable PostgreSQL.
 
 Migration 004 is implemented for B3A internal schema coverage only. Tests must
@@ -41,6 +41,10 @@ B3B adapter tests use `EMAIL_PROVIDER=fake` or a local mocked Postmark HTTP
 server. `go test ./...` must never call Postmark. A manual sandbox smoke test
 may use the provider's documented test token only when explicitly requested;
 it is not part of automated verification.
+
+B2B-Prep tests cover independent required and marketing consent, compatibility
+while the legal-content flag is off, enforcement when it is on, and migration
+005 rollback/reapply. They do not send email or enable B3 routes.
 
 On this Windows host, `go test -race ./...` is not executable because `cc1.exe`
 reports `64-bit mode not compiled in`. Use a 64-bit-capable C toolchain in a

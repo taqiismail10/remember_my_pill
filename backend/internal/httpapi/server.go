@@ -39,11 +39,12 @@ type Readiness interface {
 }
 
 type Options struct {
-	AllowedOrigin  string
-	ConsentVersion string
-	TrustedProxies []netip.Prefix
-	Logger         *slog.Logger
-	Now            func() time.Time
+	AllowedOrigin             string
+	ConsentVersion            string
+	PilotLegalContentApproved bool
+	TrustedProxies            []netip.Prefix
+	Logger                    *slog.Logger
+	Now                       func() time.Time
 }
 
 type Limiter struct {
@@ -85,12 +86,14 @@ type errorBody struct {
 }
 
 type signupRequest struct {
-	Name           string  `json:"name"`
-	Email          string  `json:"email"`
-	Consent        *bool   `json:"consent"`
-	ConsentVersion *string `json:"consentVersion"`
-	ReferralCode   *string `json:"referralCode"`
-	Company        *string `json:"company"`
+	Name                    string  `json:"name"`
+	Email                   string  `json:"email"`
+	Consent                 *bool   `json:"consent"`
+	ConsentVersion          *string `json:"consentVersion"`
+	ReferralCode            *string `json:"referralCode"`
+	MarketingConsent        *bool   `json:"marketingConsent"`
+	MarketingConsentVersion *string `json:"marketingConsentVersion"`
+	Company                 *string `json:"company"`
 }
 
 type contextKey string
@@ -150,8 +153,13 @@ func NewRouter(store Store, readiness Readiness, options Options) http.Handler {
 			writeError(w, http.StatusBadRequest, ValidationCode, "Enter a valid email.")
 			return
 		}
-		consentVersion, validConsent := validateConsent(in, options.ConsentVersion)
+		consentVersion, validConsent := validateConsent(in, options.ConsentVersion, options.PilotLegalContentApproved)
 		if !validConsent {
+			writeError(w, http.StatusBadRequest, ValidationCode, "Enter a valid email.")
+			return
+		}
+		marketingVersion, validMarketing := validateMarketingConsent(in)
+		if !validMarketing || (marketingVersion != nil && consentVersion == nil) {
 			writeError(w, http.StatusBadRequest, ValidationCode, "Enter a valid email.")
 			return
 		}
@@ -160,7 +168,7 @@ func NewRouter(store Store, readiness Readiness, options Options) http.Handler {
 		if in.Name != "" {
 			name = in.Name
 		}
-		_, err := store.Exec(req.Context(), `INSERT INTO waitlist_entries (name, email_normalized, consent_version, consented_at) VALUES ($1, $2, $3::varchar, CASE WHEN $3::varchar IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)`, name, in.Email, consentVersion)
+		_, err := store.Exec(req.Context(), `INSERT INTO waitlist_entries (name, email_normalized, consent_version, consented_at, marketing_consent_version, marketing_consented_at) VALUES ($1, $2, $3::varchar, CASE WHEN $3::varchar IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END, $4::varchar, CASE WHEN $4::varchar IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)`, name, in.Email, consentVersion, marketingVersion)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -176,9 +184,9 @@ func NewRouter(store Store, readiness Readiness, options Options) http.Handler {
 	return r
 }
 
-func validateConsent(in signupRequest, activeVersion string) (any, bool) {
+func validateConsent(in signupRequest, activeVersion string, required bool) (any, bool) {
 	if in.Consent == nil && in.ConsentVersion == nil {
-		return nil, true
+		return nil, !required
 	}
 	if in.Consent == nil || !*in.Consent || in.ConsentVersion == nil {
 		return nil, false
@@ -188,6 +196,22 @@ func validateConsent(in signupRequest, activeVersion string) (any, bool) {
 		return nil, false
 	}
 	return version, true
+}
+
+func validateMarketingConsent(in signupRequest) (any, bool) {
+	if in.MarketingConsent == nil {
+		return nil, in.MarketingConsentVersion == nil
+	}
+	if *in.MarketingConsent {
+		if in.MarketingConsentVersion == nil || strings.TrimSpace(*in.MarketingConsentVersion) != "marketing-consent-v1" {
+			return nil, false
+		}
+		return "marketing-consent-v1", true
+	}
+	if in.MarketingConsentVersion != nil {
+		return nil, false
+	}
+	return nil, true
 }
 
 func writeAccepted(w http.ResponseWriter) {

@@ -29,3 +29,10 @@ validated placeholders in `.env.example`, including a secret
 `POSTMARK_SERVER_TOKEN`. It does not activate routes or send email by itself.
 The final status-access template and B2B/legacy-consent approval are still
 required before delivery can be enabled.
+
+The B2B-Prep privacy and consent foundation is a USA + Canada, adults-18+
+pilot draft. `PILOT_LEGAL_CONTENT_APPROVED=false` is the required safe default.
+Changing it to `true` only enforces the configured required consent version;
+it does not establish legal approval or activate email, B3, referrals, or the
+pilot. The legal operator, mailing address, final review, and Terms of Use
+remain launch blockers.

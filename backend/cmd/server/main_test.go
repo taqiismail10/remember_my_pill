@@ -19,20 +19,21 @@ import (
 )
 
 type fakeStore struct {
-	mu      sync.Mutex
-	calls   int
-	name    any
-	email   string
-	consent any
-	query   string
-	err     error
+	mu               sync.Mutex
+	calls            int
+	name             any
+	email            string
+	consent          any
+	marketingConsent any
+	query            string
+	err              error
 }
 
 func (s *fakeStore) Exec(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
-	s.name, s.email, s.consent, s.query = args[0], args[1].(string), args[2], query
+	s.name, s.email, s.consent, s.marketingConsent, s.query = args[0], args[1].(string), args[2], args[3], query
 	return pgconn.CommandTag{}, s.err
 }
 
@@ -43,7 +44,7 @@ func (r fakeReadiness) Ping(context.Context) error { return r.err }
 func routerFor(store *fakeStore, readiness error, options ...httpapi.Options) http.Handler {
 	option := httpapi.Options{
 		AllowedOrigin:  "http://localhost:3000",
-		ConsentVersion: "policy-2026-08",
+		ConsentVersion: "waitlist-consent-v1",
 		Logger:         slog.New(slog.NewTextHandler(ioDiscard{}, nil)),
 		Now:            func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
 	}
@@ -116,7 +117,7 @@ func TestWaitlistAcceptsEmailOnlyAndOptionalName(t *testing.T) {
 }
 
 func TestWaitlistRejectsInvalidPayloads(t *testing.T) {
-	cases := []string{`{}`, `{"name":"A"}`, `{"email":" "}`, `{"email":"invalid"}`, `{"email":"a@example.test","extra":true}`, `{`, `{"email":"a@example.test"} {}`, `[]`, `{"email":"a@example.test","consentVersion":"policy-2026-08"}`, `{"email":"a@example.test","consent":false,"consentVersion":"policy-2026-08"}`, `{"email":"a@example.test","consent":true,"consentVersion":"stale"}`}
+	cases := []string{`{}`, `{"name":"A"}`, `{"email":" "}`, `{"email":"invalid"}`, `{"email":"a@example.test","extra":true}`, `{`, `{"email":"a@example.test"} {}`, `[]`, `{"email":"a@example.test","consentVersion":"waitlist-consent-v1"}`, `{"email":"a@example.test","consent":false,"consentVersion":"waitlist-consent-v1"}`, `{"email":"a@example.test","consent":true,"consentVersion":"stale"}`, `{"email":"a@example.test","marketingConsent":true}`, `{"email":"a@example.test","marketingConsent":true,"marketingConsentVersion":"wrong"}`, `{"email":"a@example.test","marketingConsent":true,"marketingConsentVersion":"marketing-consent-v1"}`, `{"email":"a@example.test","marketingConsent":false,"marketingConsentVersion":"marketing-consent-v1"}`}
 	cases = append(cases, `{"name":"`+strings.Repeat("a", 101)+`","email":"a@example.test"}`, `{"email":"`+strings.Repeat("a", 246)+`@example.test"}`, `{"email":"a@example.test","name":"`+strings.Repeat("a", 4096)+`"}`)
 	for _, body := range cases {
 		t.Run(body[:min(16, len(body))], func(t *testing.T) {
@@ -131,14 +132,37 @@ func TestWaitlistRejectsInvalidPayloads(t *testing.T) {
 
 func TestConsentCompatibilityAndServerTimestampQuery(t *testing.T) {
 	store := &fakeStore{}
-	w := post(routerFor(store, nil), `{"email":"ada@example.test","consent":true,"consentVersion":"policy-2026-08"}`, "203.0.113.10:1234")
+	w := post(routerFor(store, nil), `{"email":"ada@example.test","consent":true,"consentVersion":"waitlist-consent-v1"}`, "203.0.113.10:1234")
 	requireAccepted(t, w)
-	if store.consent != "policy-2026-08" {
+	if store.consent != "waitlist-consent-v1" {
 		t.Fatalf("consent=%#v", store.consent)
 	}
 	if !strings.Contains(store.query, "CURRENT_TIMESTAMP") {
 		t.Fatalf("consent timestamp was not assigned by SQL: %s", store.query)
 	}
+}
+
+func TestMarketingConsentIsIndependent(t *testing.T) {
+	store := &fakeStore{}
+	requireAccepted(t, post(routerFor(store, nil), `{"email":"ada@example.test","consent":true,"consentVersion":"waitlist-consent-v1","marketingConsent":false}`, "203.0.113.10:1234"))
+	if store.marketingConsent != nil {
+		t.Fatalf("marketing consent fabricated: %#v", store.marketingConsent)
+	}
+	store = &fakeStore{}
+	requireAccepted(t, post(routerFor(store, nil), `{"email":"ada@example.test","consent":true,"consentVersion":"waitlist-consent-v1","marketingConsent":true,"marketingConsentVersion":"marketing-consent-v1"}`, "203.0.113.10:1234"))
+	if store.marketingConsent != "marketing-consent-v1" || !strings.Contains(store.query, "marketing_consented_at") || !strings.Contains(store.query, "CURRENT_TIMESTAMP") {
+		t.Fatalf("marketing=%#v query=%s", store.marketingConsent, store.query)
+	}
+}
+
+func TestLegalActivationRequiresWaitlistConsent(t *testing.T) {
+	store := &fakeStore{}
+	options := httpapi.Options{AllowedOrigin: "http://localhost:3000", ConsentVersion: "waitlist-consent-v1", PilotLegalContentApproved: true, Logger: slog.New(slog.NewTextHandler(ioDiscard{}, nil))}
+	w := post(routerFor(store, nil, options), `{"email":"legacy@example.test"}`, "203.0.113.10:1234")
+	if w.Code != http.StatusBadRequest || store.calls != 0 {
+		t.Fatalf("status=%d calls=%d", w.Code, store.calls)
+	}
+	requireAccepted(t, post(routerFor(store, nil, options), `{"email":"new@example.test","consent":true,"consentVersion":"waitlist-consent-v1","marketingConsent":false}`, "203.0.113.11:1234"))
 }
 
 func TestDuplicateAndInternalErrors(t *testing.T) {
@@ -221,7 +245,7 @@ func TestCORSAndRequestIDProxyPolicy(t *testing.T) {
 		t.Fatalf("untrusted forwarded header changed client IP: %d", blockedWriter.Code)
 	}
 
-	trusted := routerFor(&fakeStore{}, nil, httpapi.Options{AllowedOrigin: "http://localhost:3000", ConsentVersion: "policy-2026-08", TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}, Logger: slog.New(slog.NewTextHandler(ioDiscard{}, nil))})
+	trusted := routerFor(&fakeStore{}, nil, httpapi.Options{AllowedOrigin: "http://localhost:3000", ConsentVersion: "waitlist-consent-v1", TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}, Logger: slog.New(slog.NewTextHandler(ioDiscard{}, nil))})
 	request := httptest.NewRequest(http.MethodPost, "/api/waitlist", strings.NewReader(`{"email":"trusted@example.test"}`))
 	request.RemoteAddr = "127.0.0.1:1234"
 	request.Header.Set("X-Forwarded-For", "198.51.100.1")

@@ -42,7 +42,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpapi.NewRouter(pool, pool, httpapi.Options{AllowedOrigin: cfg.AllowedOrigin, ConsentVersion: cfg.ConsentVersion, TrustedProxies: cfg.TrustedProxies, Logger: logger}),
+		Handler:           httpapi.NewRouter(pool, pool, httpapi.Options{AllowedOrigin: cfg.AllowedOrigin, ConsentVersion: cfg.ConsentVersion, PilotLegalContentApproved: cfg.PilotLegalContentApproved, TrustedProxies: cfg.TrustedProxies, Logger: logger}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -52,7 +52,7 @@ func main() {
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		logger.Info("server started", "port", cfg.Port, "consent_configured", cfg.ConsentVersion != "", "trusted_proxy_count", len(cfg.TrustedProxies), "email_provider", cfg.EmailProvider)
+		logger.Info("server started", "port", cfg.Port, "consent_configured", cfg.ConsentVersion != "", "pilot_legal_content_approved", cfg.PilotLegalContentApproved, "trusted_proxy_count", len(cfg.TrustedProxies), "email_provider", cfg.EmailProvider)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("server stopped unexpectedly")
 			os.Exit(1)

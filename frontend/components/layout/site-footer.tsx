@@ -13,7 +13,8 @@ const columns = [
   {
     heading: "Trust",
     links: [
-      { href: "#privacy", label: "Privacy" },
+      { href: "/privacy", label: "Privacy" },
+      { href: "/consumer-health-data-privacy", label: "Consumer health data" },
       { href: "#faq", label: "FAQ" },
     ],
   },
@@ -51,9 +52,16 @@ export function SiteFooter() {
       </Container>
       <Container className="flex flex-col gap-2 border-t border-border py-6 text-small text-muted sm:flex-row sm:items-center sm:justify-between">
         <p>© {new Date().getFullYear()} Remember My Pill. Product preview.</p>
-        <p>
-          No medical advice or prescription processing is provided on this site.
-        </p>
+        <div className="flex flex-col gap-1 sm:items-end">
+          <p>
+            No medical advice or prescription processing is provided on this
+            site.
+          </p>
+          <p>
+            Terms of Use are not yet available; this pilot draft is not ready
+            for public launch.
+          </p>
+        </div>
       </Container>
     </footer>
   );
