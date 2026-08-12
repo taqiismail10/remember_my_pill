@@ -35,3 +35,6 @@ Desktop.ini
 
 # Local Figma-export workspace.
 work/
+
+# Next.js generated TypeScript environment
+frontend/next-env.d.ts
