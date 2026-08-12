@@ -1,1 +1,37 @@
-rmp_prd_bundle/
+# Environment files — retain the safe template.
+.env
+.env.*
+!.env.example
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+test-results/
+playwright-report/
+
+# Go build and test artifacts
+*.exe
+*.test
+coverage.out
+*.coverprofile
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local AI-tool state — retain shared skills and project configuration.
+.claude/settings.local.json
+.claude/*.local.*
+.codex/*.local.*
+.codex/cache/
+.codex/sessions/
+.cursor/*.local.*
+
+# Local Figma-export workspace.
+work/
