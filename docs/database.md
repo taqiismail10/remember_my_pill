@@ -1,5 +1,19 @@
 # Waitlist database
 
-The repository-owned development PostgreSQL 16 service is bound only to `127.0.0.1:5433`. It uses `backend/migrations/001_waitlist_entries.up.sql`, `002_waitlist_entries_name_optional.up.sql`, and their paired down migrations. The sole table, `waitlist_entries`, has a PostgreSQL-generated UUID, a bounded optional (nullable) name, bounded unique normalized email, and PostgreSQL-generated timestamp. `name` is nullable so the email-only `/waitlist` page can sign up without collecting a name; when provided it is still bounded to 1–100 characters by the existing check constraint. It has no health, prescription, referral, ranking, or administrative fields.
+The repository-owned development PostgreSQL 16 service is bound only to
+`127.0.0.1:5433`. Current schema is supplied by
+`backend/migrations/001_waitlist_entries.up.sql` and
+`002_waitlist_entries_name_optional.up.sql`. `waitlist_entries` has a
+PostgreSQL UUID, bounded optional nullable name, bounded unique normalized
+email, and server-generated timestamp. It has no health or prescription data.
 
-Do not run the down migration against the development database. The intended disposable integration database is separately named and bound only to 127.0.0.1:5434 through `docker-compose.test.yml`; it must be torn down with its own Compose project and volume only.
+Backend Phase B1 locks the forward-only design for consent, referral, token,
+rank, and legacy-entry handling in
+[backend-phase-b1-contract.md](backend-phase-b1-contract.md). Migrations `003`
+and `004` are intentionally not created in B1. Existing rows must remain
+truthfully pre-consent; no consent values may be fabricated or backfilled.
+
+Do not run down migrations against the development database. The disposable
+integration database is separately bound to `127.0.0.1:5434` through
+`docker-compose.test.yml` and must be torn down only with its own Compose
+project and volume.
