@@ -5,12 +5,17 @@ Run unit and handler tests from `backend/` with `go test ./...`; format with
 binary with `go build ./cmd/server`.
 
 Integration tests are tagged and require `TEST_DATABASE_URL` for the disposable
-PostgreSQL database. The intended command is `go test -tags=integration ./...`
-after `docker compose -f docker-compose.test.yml -p rmp-phase2-test up -d`.
+PostgreSQL database named `remember_my_pill_test`. The intended command is
+`go test -tags=integration ./...` after `docker compose -f
+docker-compose.test.yml -p rmp-phase2-test up -d`.
 Tear down only that project with
 `docker compose -f docker-compose.test.yml -p rmp-phase2-test down -v`.
 
-## Locked future acceptance coverage
+The canonical migration harness applies the embedded ordered sequence
+`001 → 002 → 003`, validates legacy pre-consent rows, and checks down/up
+reversal before resetting the disposable database for handler coverage.
+
+## Later acceptance coverage
 
 Before B2–B6 are declared complete, tests must cover:
 
@@ -28,9 +33,8 @@ Before B2–B6 are declared complete, tests must cover:
 - complete ordered migration lifecycle `001 → 002 → 003 → 004`, including
   paired down migrations, against disposable PostgreSQL.
 
-The current integration reset is intentionally incomplete for that future
-lifecycle because migrations `003` and `004` do not exist in B1. It must be
-updated when they are implemented, not before.
+Migration 004 is not yet implemented. Add it to the one ordered migration list
+when B3 introduces the referral-event schema.
 
 On this Windows host, `go test -race ./...` is not executable because `cc1.exe`
 reports `64-bit mode not compiled in`. Use a 64-bit-capable C toolchain in a

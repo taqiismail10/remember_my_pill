@@ -63,7 +63,7 @@ describe("/waitlist page", () => {
   });
 
   it("submits only an email, never a name field", async () => {
-    vi.mocked(fetch).mockReturnValue(jsonResponse(201, { status: "created" }));
+    vi.mocked(fetch).mockReturnValue(jsonResponse(202, { status: "accepted" }));
     render(<WaitlistPage />);
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: " Ada@Example.com " },
@@ -92,11 +92,11 @@ describe("/waitlist page", () => {
     const button = await screen.findByRole("button", { name: /joining/i });
     expect(button).toBeDisabled();
 
-    resolveFetch(await jsonResponse(201, { status: "created" }));
+    resolveFetch(await jsonResponse(202, { status: "accepted" }));
   });
 
   it("shows a branded success state without promising rank or referrals", async () => {
-    vi.mocked(fetch).mockReturnValue(jsonResponse(201, { status: "created" }));
+    vi.mocked(fetch).mockReturnValue(jsonResponse(202, { status: "accepted" }));
     render(<WaitlistPage />);
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "ada@example.com" },
@@ -113,15 +113,8 @@ describe("/waitlist page", () => {
     expect(screen.queryByText(/referral/i)).not.toBeInTheDocument();
   });
 
-  it("shows a friendly message for a duplicate email", async () => {
-    vi.mocked(fetch).mockReturnValue(
-      jsonResponse(409, {
-        error: {
-          code: "WAITLIST_EMAIL_EXISTS",
-          message: "This email is already on the waitlist.",
-        },
-      }),
-    );
+  it("shows the same neutral success message for an accepted request", async () => {
+    vi.mocked(fetch).mockReturnValue(jsonResponse(202, { status: "accepted" }));
     render(<WaitlistPage />);
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "ada@example.com" },
@@ -129,9 +122,7 @@ describe("/waitlist page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Join the waitlist" }));
 
     expect(
-      await screen.findByText(
-        /looks like this email is already on the waitlist/i,
-      ),
+      await screen.findByText(/if this email is eligible/i),
     ).toBeInTheDocument();
   });
 
@@ -149,7 +140,7 @@ describe("/waitlist page", () => {
   });
 
   it("submits via the keyboard (Enter) without a mouse click", async () => {
-    vi.mocked(fetch).mockReturnValue(jsonResponse(201, { status: "created" }));
+    vi.mocked(fetch).mockReturnValue(jsonResponse(202, { status: "accepted" }));
     render(<WaitlistPage />);
     const email = screen.getByLabelText("Email");
     fireEvent.change(email, { target: { value: "ada@example.com" } });
