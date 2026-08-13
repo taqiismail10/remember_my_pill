@@ -44,3 +44,10 @@ Changing it to `true` only enforces the configured required consent version;
 it does not establish legal approval or activate email, B3, referrals, or the
 pilot. The legal operator, mailing address, final review, and Terms of Use
 remain launch blockers.
+
+B3D-Prep has a second independent server gate, `STATUS_ACCESS_ENABLED=false`.
+It can be enabled only in isolated testing with legal approval, a valid HTTPS
+`STATUS_ACCESS_BASE_URL`, and a base64-encoded 32-byte-or-longer
+`STATUS_ACCESS_RATE_LIMIT_KEY`. `NEXT_PUBLIC_STATUS_ACCESS_ENABLED=false`
+keeps the frontend verification and status pages in their pre-launch state;
+it cannot enable the API.

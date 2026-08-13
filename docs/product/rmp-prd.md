@@ -7,7 +7,7 @@
 | Field | Detail |
 | --- | --- |
 | **Product name** | Remember My Pill (RMP) |
-| **Document version** | 1.2.2 |
+| **Document version** | 1.2.3 |
 | **Last updated** | 13 August 2026 |
 | **Primary deliverable** | Premium marketing website, product showcase and viral waitlist |
 | **Frontend** | Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, Framer Motion, Lucide Icons |
@@ -48,6 +48,16 @@
 - Locked future browser credentials to a `Secure`, `HttpOnly`,
   `SameSite=Lax`, host-only cookie. No status-access, verification-exchange,
   logout, referral, or email-delivery route is activated by this update.
+
+### Version 1.2.3 Update Summary
+
+- Added B3D-Prep status-access HTTP and browser-flow foundations behind an
+  independently disabled server gate. The verification link uses a short-lived
+  fragment value that is POSTed and cleared before redirecting.
+- Added generic non-enumerating request behavior, keyed in-memory abuse limits,
+  cookie-session exchange/status/logout foundations, and disabled browser
+  routes. Legal approval and approved email copy remain required before any
+  public activation.
 
 ---
 

@@ -63,6 +63,11 @@ B3C adds internal, server-side browser status-session primitives only. It does
 not register a verification exchange, logout, status, referral, or webhook
 route. See [B3C browser session infrastructure](backend-phase-b3c-status-session-infrastructure.md).
 
+B3D-Prep registers the future request, exchange, status, and logout routes,
+but every one returns feature-unavailable while `STATUS_ACCESS_ENABLED=false`
+or pilot legal approval is false. They are not public functionality. See
+[B3D status-access foundation](backend-phase-b3d-status-access-foundation.md).
+
 ## B2B-Prep pilot consent foundation
 
 The USA + Canada adult-pilot foundation recognizes `waitlist-consent-v1` and

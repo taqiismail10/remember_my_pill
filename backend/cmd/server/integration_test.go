@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -99,6 +100,26 @@ func integrationRouter(store httpapi.Store, readiness httpapi.Readiness) http.Ha
 		PilotLegalContentApproved: true,
 		Logger:                    slog.New(slog.NewTextHandler(ioDiscard{}, nil)),
 	})
+}
+
+func integrationStatusRouter(sender *access.FakeEmailSender) http.Handler {
+	return httpapi.NewRouter(integrationPool, integrationPool, httpapi.Options{
+		AllowedOrigin: "http://localhost:3000", ConsentVersion: "waitlist-consent-v1", PilotLegalContentApproved: true,
+		StatusAccessEnabled: true, StatusAccessRateLimitKey: []byte("01234567890123456789012345678901"), StatusStore: integrationPool,
+		StatusEmailSender: sender, StatusAccessBaseURL: "https://remembermypill.example", StatusSessionCookieSecure: true,
+		Logger: slog.New(slog.NewTextHandler(ioDiscard{}, nil)),
+	})
+}
+
+func integrationStatusPost(r http.Handler, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.RemoteAddr = "203.0.113.44:1234"
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
 }
 
 func integrationPost(r http.Handler, body, ip string) *httptest.ResponseRecorder {
@@ -489,6 +510,94 @@ func TestIntegrationConcurrentBrowserSessionCreationHonorsCap(t *testing.T) {
 	var active int
 	if err := integrationPool.QueryRow(ctx, `SELECT count(*) FROM status_access_sessions WHERE entry_id = $1 AND revoked_at IS NULL AND expires_at > $2`, entryID, time.Now().UTC()).Scan(&active); err != nil || active != access.MaxActiveBrowserSessions {
 		t.Fatalf("active sessions=%d err=%v", active, err)
+	}
+}
+
+func TestIntegrationStatusAccessHTTPFoundation(t *testing.T) {
+	resetDatabase(t)
+	ctx := context.Background()
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO waitlist_entries (email_normalized, consent_version, consented_at) VALUES ('eligible@example.test', 'waitlist-consent-v1', CURRENT_TIMESTAMP), ('legacy@example.test', NULL, NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	sender := &access.FakeEmailSender{Result: access.DeliveryAccepted}
+	r := integrationStatusRouter(sender)
+	request := func(email string) *httptest.ResponseRecorder {
+		return integrationStatusPost(r, "/api/waitlist/status-access/request", `{"email":"`+email+`"}`, map[string]string{"Content-Type": "application/json"})
+	}
+	for _, email := range []string{"unknown@example.test", "legacy@example.test", "eligible@example.test"} {
+		if response := request(email); response.Code != http.StatusAccepted || response.Body.String() != `{"status":"accepted"}` {
+			t.Fatalf("request %q: %d %s", email, response.Code, response.Body.String())
+		}
+	}
+	if len(sender.Sent) != 1 {
+		t.Fatalf("eligible request sends=%d", len(sender.Sent))
+	}
+	verificationURL, err := url.Parse(sender.Sent[0].VerificationURL)
+	if err != nil || verificationURL.RawQuery != "" || verificationURL.Fragment == "" || verificationURL.Path != "/waitlist/verify" {
+		t.Fatalf("verification URL must use a fragment: %q err=%v", sender.Sent[0].VerificationURL, err)
+	}
+	token, err := url.ParseQuery(verificationURL.Fragment)
+	if err != nil || token.Get("v") == "" {
+		t.Fatal("verification fragment missing token")
+	}
+
+	// The same external response is retained for provider outcomes and abuse
+	// rejection. The raw email is never used as the in-memory limiter key.
+	sender.Result = access.DeliverySuppressed
+	if response := request("eligible@example.test"); response.Code != http.StatusAccepted || response.Body.String() != `{"status":"accepted"}` {
+		t.Fatalf("suppressed response: %d %s", response.Code, response.Body.String())
+	}
+	sender.Result = access.DeliveryTemporaryFailure
+	if response := request("eligible@example.test"); response.Code != http.StatusAccepted || response.Body.String() != `{"status":"accepted"}` {
+		t.Fatalf("temporary response: %d %s", response.Code, response.Body.String())
+	}
+	if response := request("eligible@example.test"); response.Code != http.StatusAccepted || response.Body.String() != `{"status":"accepted"}` {
+		t.Fatalf("rate-limited response: %d %s", response.Code, response.Body.String())
+	}
+
+	exchange := integrationStatusPost(r, "/api/waitlist/status-access/exchange", `{"verificationToken":"`+token.Get("v")+`"}`, map[string]string{"Content-Type": "application/json"})
+	if exchange.Code != http.StatusOK || exchange.Header().Get("Set-Cookie") == "" {
+		t.Fatalf("exchange: %d cookie=%q", exchange.Code, exchange.Header().Get("Set-Cookie"))
+	}
+	cookie := exchange.Result().Cookies()[0]
+	if cookie.Name != access.ProductionStatusCookieName || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/" || cookie.Domain != "" {
+		t.Fatalf("unsafe session cookie: %+v", cookie)
+	}
+	badExchange := integrationStatusPost(r, "/api/waitlist/status-access/exchange?verificationToken=bad", `{"verificationToken":"bad"}`, map[string]string{"Content-Type": "application/json"})
+	if badExchange.Code != http.StatusUnauthorized || badExchange.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("invalid exchange: %d cookie=%q", badExchange.Code, badExchange.Header().Get("Set-Cookie"))
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/waitlist/status", nil)
+	statusReq.AddCookie(cookie)
+	status := httptest.NewRecorder()
+	r.ServeHTTP(status, statusReq)
+	if status.Code != http.StatusOK || strings.Contains(status.Body.String(), "eligible@example.test") || strings.Contains(status.Body.String(), "consent") {
+		t.Fatalf("status response: %d %s", status.Code, status.Body.String())
+	}
+	foreign := integrationStatusPost(r, "/api/waitlist/status/logout", `{}`, map[string]string{"Content-Type": "application/json", "Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site", "Cookie": cookie.String()})
+	if foreign.Code != http.StatusForbidden {
+		t.Fatalf("foreign logout=%d", foreign.Code)
+	}
+	logout := integrationStatusPost(r, "/api/waitlist/status/logout", `{}`, map[string]string{"Content-Type": "application/json", "Origin": "http://localhost:3000", "Sec-Fetch-Site": "same-origin", "Cookie": cookie.String()})
+	if logout.Code != http.StatusNoContent || !strings.Contains(logout.Header().Get("Set-Cookie"), "Max-Age=0") {
+		t.Fatalf("logout=%d cookie=%q", logout.Code, logout.Header().Get("Set-Cookie"))
+	}
+	status = httptest.NewRecorder()
+	r.ServeHTTP(status, statusReq)
+	if status.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked status=%d", status.Code)
+	}
+}
+
+func TestIntegrationStatusAccessRemainsDisabledWithoutGate(t *testing.T) {
+	resetDatabase(t)
+	r := integrationRouter(integrationPool, integrationPool)
+	for _, path := range []string{"/api/waitlist/status-access/request", "/api/waitlist/status-access/exchange", "/api/waitlist/status/logout"} {
+		response := integrationStatusPost(r, path, `{}`, map[string]string{"Content-Type": "application/json"})
+		if response.Code != http.StatusNotFound || response.Header().Get("Set-Cookie") != "" {
+			t.Fatalf("disabled %s: %d cookie=%q", path, response.Code, response.Header().Get("Set-Cookie"))
+		}
 	}
 }
 

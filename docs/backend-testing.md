@@ -52,6 +52,12 @@ individual/all-session revocation, cascade deletion, deterministic oldest-first
 eviction at the five active-session cap, and concurrent one-time verification
 token exchange. They do not expose a B3 HTTP endpoint or send email.
 
+B3D-Prep tagged integration tests run the full guarded HTTP foundation using
+the fake sender: generic request responses for eligible/unknown/legacy and
+limited cases, fragment-only verification URLs, exchange cookie behavior,
+minimal status output, logout CSRF rejection/success, and disabled-gate route
+behavior. No integration test contacts Postmark.
+
 On this Windows host, `go test -race ./...` is not executable because `cc1.exe`
 reports `64-bit mode not compiled in`. Use a 64-bit-capable C toolchain in a
 future environment; do not treat the race suite as passing here.

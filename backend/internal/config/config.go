@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -27,6 +28,8 @@ type Config struct {
 	PilotLegalContentApproved    bool
 	RuntimeEnvironment           string
 	StatusSessionCookieSecure    bool
+	StatusAccessEnabled          bool
+	StatusAccessRateLimitKey     []byte
 }
 
 func Load() (Config, error) {
@@ -63,6 +66,21 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("STATUS_SESSION_COOKIE_SECURE=false is allowed only when RMP_ENVIRONMENT=development")
 	}
 	cfg.StatusSessionCookieSecure = statusCookieSecure
+	statusAccessEnabled, err := parseBoolean("STATUS_ACCESS_ENABLED", os.Getenv("STATUS_ACCESS_ENABLED"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.StatusAccessEnabled = statusAccessEnabled
+	if statusAccessEnabled {
+		key, err := decodeStatusAccessRateLimitKey(os.Getenv("STATUS_ACCESS_RATE_LIMIT_KEY"))
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.StatusAccessRateLimitKey = key
+		if !cfg.PilotLegalContentApproved || !validStatusAccessBaseURL(cfg.StatusAccessBaseURL) {
+			return Config{}, fmt.Errorf("status access requires PILOT_LEGAL_CONTENT_APPROVED=true and a valid STATUS_ACCESS_BASE_URL")
+		}
+	}
 	if cfg.EmailProvider == "" {
 		cfg.EmailProvider = "fake"
 	}
@@ -87,6 +105,14 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func decodeStatusAccessRateLimitKey(value string) ([]byte, error) {
+	key, err := base64.RawStdEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil || len(key) < 32 {
+		return nil, fmt.Errorf("STATUS_ACCESS_RATE_LIMIT_KEY must be base64-encoded and at least 32 bytes")
+	}
+	return key, nil
 }
 
 func parseBoolean(name, value string) (bool, error) {

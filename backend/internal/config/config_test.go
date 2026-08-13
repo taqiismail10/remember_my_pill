@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"encoding/base64"
+	"strings"
+	"testing"
+)
 
 func TestValidAllowedOrigin(t *testing.T) {
 	for _, value := range []string{"", "localhost:3000", "ftp://example.test", "http://example.test/path", "https://example.test"} {
@@ -34,12 +38,30 @@ func TestValidateEmailProvider(t *testing.T) {
 }
 
 func TestLoadDefaultsToFakeWithoutPostmarkCredentials(t *testing.T) {
-	for _, key := range []string{"DATABASE_URL", "ALLOWED_ORIGIN", "PORT", "CONSENT_VERSION", "TRUSTED_PROXY_CIDRS", "EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "EMAIL_FROM_NAME", "STATUS_ACCESS_BASE_URL", "POSTMARK_SERVER_TOKEN", "POSTMARK_MESSAGE_STREAM", "POSTMARK_STATUS_ACCESS_TEMPLATE", "PILOT_LEGAL_CONTENT_APPROVED", "RMP_ENVIRONMENT", "STATUS_SESSION_COOKIE_SECURE"} {
+	for _, key := range []string{"DATABASE_URL", "ALLOWED_ORIGIN", "PORT", "CONSENT_VERSION", "TRUSTED_PROXY_CIDRS", "EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "EMAIL_FROM_NAME", "STATUS_ACCESS_BASE_URL", "POSTMARK_SERVER_TOKEN", "POSTMARK_MESSAGE_STREAM", "POSTMARK_STATUS_ACCESS_TEMPLATE", "PILOT_LEGAL_CONTENT_APPROVED", "RMP_ENVIRONMENT", "STATUS_SESSION_COOKIE_SECURE", "STATUS_ACCESS_ENABLED", "STATUS_ACCESS_RATE_LIMIT_KEY"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("DATABASE_URL", "postgres://example.test/db")
 	t.Setenv("ALLOWED_ORIGIN", "http://example.test")
 	if cfg, err := Load(); err != nil || cfg.EmailProvider != "fake" || !cfg.StatusSessionCookieSecure || cfg.RuntimeEnvironment != "production" {
+		t.Fatalf("cfg=%+v err=%v", cfg, err)
+	}
+}
+
+func TestStatusAccessActivationRequiresIndependentApprovalsAndStrongKey(t *testing.T) {
+	for _, key := range []string{"DATABASE_URL", "ALLOWED_ORIGIN", "STATUS_ACCESS_ENABLED", "STATUS_ACCESS_RATE_LIMIT_KEY", "PILOT_LEGAL_CONTENT_APPROVED", "STATUS_ACCESS_BASE_URL"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("DATABASE_URL", "postgres://example.test/db")
+	t.Setenv("ALLOWED_ORIGIN", "http://example.test")
+	t.Setenv("STATUS_ACCESS_ENABLED", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected missing activation prerequisites to fail")
+	}
+	t.Setenv("PILOT_LEGAL_CONTENT_APPROVED", "true")
+	t.Setenv("STATUS_ACCESS_BASE_URL", "https://example.test")
+	t.Setenv("STATUS_ACCESS_RATE_LIMIT_KEY", base64.RawStdEncoding.EncodeToString([]byte(strings.Repeat("x", 32))))
+	if cfg, err := Load(); err != nil || !cfg.StatusAccessEnabled || len(cfg.StatusAccessRateLimitKey) != 32 {
 		t.Fatalf("cfg=%+v err=%v", cfg, err)
 	}
 }
