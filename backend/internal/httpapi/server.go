@@ -18,6 +18,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"remember_my_pill/backend/internal/access"
 )
 
 const (
@@ -38,6 +40,10 @@ type Readiness interface {
 	Ping(context.Context) error
 }
 
+type StatusStore interface {
+	access.TransactionDB
+}
+
 type Options struct {
 	AllowedOrigin             string
 	ConsentVersion            string
@@ -45,6 +51,12 @@ type Options struct {
 	TrustedProxies            []netip.Prefix
 	Logger                    *slog.Logger
 	Now                       func() time.Time
+	StatusAccessEnabled       bool
+	StatusAccessRateLimitKey  []byte
+	StatusStore               StatusStore
+	StatusEmailSender         access.EmailSender
+	StatusAccessBaseURL       string
+	StatusSessionCookieSecure bool
 }
 
 type Limiter struct {
@@ -181,6 +193,7 @@ func NewRouter(store Store, readiness Readiness, options Options) http.Handler {
 		}
 		writeAccepted(w)
 	})
+	registerStatusAccessRoutes(r, options, logger)
 	return r
 }
 

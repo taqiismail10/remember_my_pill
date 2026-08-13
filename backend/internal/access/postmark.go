@@ -129,23 +129,24 @@ func (s *PostmarkSender) SendStatusAccessEmail(ctx context.Context, email Status
 	return DeliveryRejected
 }
 
-// BuildVerificationURL keeps raw verification material transient and ensures
-// a future long-lived status token can never accidentally be placed in email.
+// BuildVerificationURL puts a short-lived verification value only in a URL
+// fragment. Fragments are not sent to the server in the initial navigation;
+// the browser verification route immediately POSTs it and clears history.
 func BuildVerificationURL(baseURL, verificationToken string) (string, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil || base.Scheme != "https" || base.Host == "" || base.RawQuery != "" || base.Fragment != "" || verificationToken == "" {
 		return "", errors.New("invalid status access URL configuration")
 	}
-	base.Path = strings.TrimRight(base.Path, "/") + "/waitlist/status-access"
-	query := url.Values{}
-	query.Set("verification_token", verificationToken)
-	base.RawQuery = query.Encode()
+	base.Path = strings.TrimRight(base.Path, "/") + "/waitlist/verify"
+	base.RawQuery = ""
+	base.Fragment = url.Values{"v": []string{verificationToken}}.Encode()
 	return base.String(), nil
 }
 
 func validVerificationURL(value string) bool {
 	u, err := url.Parse(value)
-	return err == nil && u.Scheme == "https" && u.Host != "" && u.Query().Get("verification_token") != ""
+	fragment, fragmentErr := url.ParseQuery(u.Fragment)
+	return err == nil && fragmentErr == nil && u.Scheme == "https" && u.Host != "" && u.Path == "/waitlist/verify" && u.RawQuery == "" && fragment.Get("v") != ""
 }
 
 func validEmail(value string) bool {

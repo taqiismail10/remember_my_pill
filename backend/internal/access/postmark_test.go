@@ -94,7 +94,7 @@ func TestPostmarkConfigurationAndProviderSelection(t *testing.T) {
 
 func TestBuildVerificationURL(t *testing.T) {
 	value, err := BuildVerificationURL("https://remembermypill.com", "short-lived-token")
-	if err != nil || !strings.Contains(value, "verification_token=short-lived-token") {
+	if err != nil || !strings.Contains(value, "/waitlist/verify#v=short-lived-token") || strings.Contains(value, "?") {
 		t.Fatalf("url=%q err=%v", value, err)
 	}
 	if _, err := BuildVerificationURL("http://remembermypill.com", "token"); err == nil {
@@ -112,5 +112,5 @@ func testPostmarkSender(t *testing.T, endpoint string, client *http.Client) *Pos
 }
 
 func testEmail() StatusAccessEmail {
-	return StatusAccessEmail{To: "person@example.test", VerificationURL: "https://remembermypill.example/waitlist/status-access?verification_token=short-lived-token"}
+	return StatusAccessEmail{To: "person@example.test", VerificationURL: "https://remembermypill.example/waitlist/verify#v=short-lived-token"}
 }

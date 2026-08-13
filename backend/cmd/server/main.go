@@ -24,7 +24,8 @@ func main() {
 		logger.Error("startup configuration failed")
 		os.Exit(1)
 	}
-	if _, err := access.NewEmailSender(access.ProviderConfig{Provider: cfg.EmailProvider, FromAddress: cfg.EmailFromAddress, FromName: cfg.EmailFromName, MessageStream: cfg.PostmarkMessageStream, PostmarkServerToken: cfg.PostmarkServerToken, PostmarkTemplateAlias: cfg.PostmarkStatusAccessTemplate}); err != nil {
+	emailSender, err := access.NewEmailSender(access.ProviderConfig{Provider: cfg.EmailProvider, FromAddress: cfg.EmailFromAddress, FromName: cfg.EmailFromName, MessageStream: cfg.PostmarkMessageStream, PostmarkServerToken: cfg.PostmarkServerToken, PostmarkTemplateAlias: cfg.PostmarkStatusAccessTemplate})
+	if err != nil {
 		logger.Error("email provider configuration failed")
 		os.Exit(1)
 	}
@@ -41,8 +42,12 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           httpapi.NewRouter(pool, pool, httpapi.Options{AllowedOrigin: cfg.AllowedOrigin, ConsentVersion: cfg.ConsentVersion, PilotLegalContentApproved: cfg.PilotLegalContentApproved, TrustedProxies: cfg.TrustedProxies, Logger: logger}),
+		Addr: ":" + cfg.Port,
+		Handler: httpapi.NewRouter(pool, pool, httpapi.Options{
+			AllowedOrigin: cfg.AllowedOrigin, ConsentVersion: cfg.ConsentVersion, PilotLegalContentApproved: cfg.PilotLegalContentApproved, TrustedProxies: cfg.TrustedProxies, Logger: logger,
+			StatusAccessEnabled: cfg.StatusAccessEnabled, StatusAccessRateLimitKey: cfg.StatusAccessRateLimitKey, StatusStore: pool, StatusEmailSender: emailSender,
+			StatusAccessBaseURL: cfg.StatusAccessBaseURL, StatusSessionCookieSecure: cfg.StatusSessionCookieSecure,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
